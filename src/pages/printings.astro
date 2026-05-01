@@ -1,0 +1,24 @@
+---
+import { CardSearch } from "@/components/CardSearch";
+import SiteFooter from "@/components/SiteFooter.astro";
+import faviconUrl from "@/images/favicon.ico";
+const faviconHref = typeof faviconUrl === "string" ? faviconUrl : faviconUrl.src;
+import "@/styles/global.css";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="description" content="Search exact Magic card names and compare paper printings." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href={faviconHref} />
+    <title>Printings | MTG Card Forge</title>
+  </head>
+  <body>
+    <main>
+      <CardSearch client:load />
+    </main>
+    <SiteFooter />
+  </body>
+</html>

@@ -1,0 +1,95 @@
+---
+import bmacUrl from "@/images/bmac.svg";
+import githubUrl from "@/images/github.svg?url";
+import xUrl from "@/images/x.png";
+
+const bmacSrc = typeof bmacUrl === "string" ? bmacUrl : bmacUrl.src;
+const xSrc = typeof xUrl === "string" ? xUrl : xUrl.src;
+
+const links = [
+  { href: "/privacy", label: "Privacy" },
+  { href: "/terms", label: "Terms" },
+];
+
+const iconLinks = [
+  { href: "https://github.com/matt/MTGCardForge", icon: githubUrl, label: "GitHub" },
+  { href: "https://x.com/mtgcardforge", icon: xSrc, label: "X" },
+  { href: "https://www.buymeacoffee.com/mtgcardforge", icon: bmacSrc, label: "BuyMeACoffee" },
+];
+---
+
+<footer class="fixed bottom-0 left-0 right-0 z-30 border-t bg-card/95 backdrop-blur">
+  <div class="mx-auto grid min-h-14 max-w-7xl grid-cols-1 items-center gap-2 px-4 py-2 text-xs text-muted-foreground sm:px-6 md:grid-cols-3 lg:px-8">
+    <div class="flex flex-wrap items-center justify-center gap-2 md:justify-start">
+      <span class="font-medium text-foreground">Powered by:</span>
+      <a
+        class="transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        href="https://scryfall.com/docs/api"
+        rel="noopener noreferrer"
+        target="_blank"
+      >
+        Scryfall
+      </a>
+      <span aria-hidden="true">/</span>
+      <a
+        class="transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        href="https://www.tcgplayer.com/"
+        rel="noopener noreferrer"
+        target="_blank"
+      >
+        TCGplayer
+      </a>
+      <span aria-hidden="true">/</span>
+      <a
+        class="transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        href="https://github.com/andrewgioia/keyrune"
+        rel="noopener noreferrer"
+        target="_blank"
+      >
+        Keyrune
+      </a>
+      <span aria-hidden="true">/</span>
+      <a
+        class="transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        href="https://github.com/andrewgioia/mana"
+        rel="noopener noreferrer"
+        target="_blank"
+      >
+        Mana
+      </a>
+    </div>
+    <nav class="flex flex-wrap items-center justify-center gap-3" aria-label="Legal">
+      {
+        links.map((link) => {
+          const isExternal = link.href.startsWith("http");
+
+          return (
+            <a
+              class="transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              href={link.href}
+              rel={isExternal ? "noopener noreferrer" : undefined}
+              target={isExternal ? "_blank" : undefined}
+            >
+              {link.label}
+            </a>
+          );
+        })
+      }
+    </nav>
+    <nav class="flex flex-wrap items-center justify-center gap-2 md:justify-end" aria-label="Social links">
+      {
+        iconLinks.map((link) => (
+          <a
+            aria-label={link.label}
+            class="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            href={link.href}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            <img alt="" class="max-h-5 max-w-5" src={link.icon} />
+          </a>
+        ))
+      }
+    </nav>
+  </div>
+</footer>

@@ -1,0 +1,24 @@
+---
+import { SetSearch } from "@/components/SetSearch";
+import SiteFooter from "@/components/SiteFooter.astro";
+import faviconUrl from "@/images/favicon.ico";
+const faviconHref = typeof faviconUrl === "string" ? faviconUrl : faviconUrl.src;
+import "@/styles/global.css";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="description" content="Search Magic sets and display paper cards across related subsets." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href={faviconHref} />
+    <title>Sets | MTG Card Forge</title>
+  </head>
+  <body>
+    <main>
+      <SetSearch client:load />
+    </main>
+    <SiteFooter />
+  </body>
+</html>

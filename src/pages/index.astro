@@ -1,0 +1,92 @@
+---
+import SiteLayout from "@/layouts/SiteLayout.astro";
+
+const tools = [
+  {
+    href: "/printings",
+    label: "Printings",
+    details: [
+      "Exact-name card lookup with autocomplete suggestions.",
+      "Card detail panel with image, oracle text, legality summary, set data, artist, and TCGplayer price button.",
+      "Paper printing gallery with filters for Standard, Borderless, Extended, Showcase, Etched, Halo Foil, and Retro.",
+    ],
+  },
+  {
+    href: "/sets",
+    label: "Sets",
+    details: [
+      "Search by set code and include related base, commander, supplemental, promo, token, and other subsets.",
+      "Set overview stats are shown above the card list.",
+      "Section labels, table-of-contents jumps, frame filters, token filters, and price rows help compare the full release.",
+    ],
+  },
+  {
+    href: "/tokens",
+    label: "Tokens",
+    details: [
+      "Search token names directly, including variants like different sizes, colors, abilities, and power/toughness.",
+      "Search source cards that create tokens and see the generated token details beside the card details.",
+      "Token printings and producer cards are grouped so alternate versions are easier to trace.",
+    ],
+  },
+  {
+    href: "/artists",
+    label: "Artists",
+    details: [
+      "Autocomplete searches artist names instead of card names.",
+      "Artist names from card detail pages can link straight into this gallery.",
+      "Cards are sorted most recent first and use the shared tile layout with set code, collector number, set icon, and prices.",
+    ],
+  },
+  {
+    href: "/deck",
+    label: "Deck",
+    details: [
+      "Accepts pasted deck lists plus Moxfield and Archidekt deck URLs.",
+      "Parses common export formats with set codes, collector numbers, foil markers, and special named versions.",
+      "Groups cards into Planeswalker, Creature, Artifact, Enchantment, Instant, Sorcery, Other, Lands, and Basic Land sections.",
+    ],
+  },
+];
+---
+
+<SiteLayout
+  title="MTG Card Forge"
+  description="Search Magic cards, compare printings, explore sets, tokens, artists, and deck lists."
+>
+  <section class="mx-auto w-full max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8">
+    <div class="rounded-lg border bg-card p-8 shadow-sm">
+      <h1 class="mt-2 max-w-4xl text-3xl font-semibold tracking-normal sm:text-4xl">
+        Practical tools for Magic card printings, sets, tokens, artists, and decks.
+      </h1>
+    </div>
+
+    <section class="space-y-4">
+      <div class="grid gap-4">
+        {
+          tools.map((tool) => (
+            <a
+              class="group block overflow-hidden rounded-lg border bg-card shadow-sm transition-colors hover:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              href={tool.href}
+            >
+              <div class="p-5 sm:p-6">
+                <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <h3 class="text-xl font-semibold tracking-normal">{tool.label}</h3>
+                  </div>
+                </div>
+                <div class="mt-8 grid gap-3 md:grid-cols-3">
+                  {tool.details.map((detail) => (
+                    <p class="rounded-md border bg-background/50 p-3 text-sm leading-6 text-muted-foreground">
+                      {detail}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            </a>
+          ))
+        }
+      </div>
+    </section>
+  </section>
+</SiteLayout>

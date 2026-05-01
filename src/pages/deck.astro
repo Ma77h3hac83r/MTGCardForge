@@ -1,0 +1,24 @@
+---
+import { DeckBuilder } from "@/components/DeckBuilder";
+import SiteFooter from "@/components/SiteFooter.astro";
+import faviconUrl from "@/images/favicon.ico";
+const faviconHref = typeof faviconUrl === "string" ? faviconUrl : faviconUrl.src;
+import "@/styles/global.css";
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="description" content="Import deck lists and group cards by type using cheapest Scryfall USD printings." />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href={faviconHref} />
+    <title>Deck | MTG Card Forge</title>
+  </head>
+  <body>
+    <main>
+      <DeckBuilder client:load />
+    </main>
+    <SiteFooter />
+  </body>
+</html>

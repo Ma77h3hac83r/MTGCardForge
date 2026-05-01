@@ -1,0 +1,48 @@
+---
+import faviconUrl from "@/images/favicon.ico";
+import logoUrl from "@/images/logo.png";
+import SiteFooter from "@/components/SiteFooter.astro";
+import { NAV_ITEMS } from "@/lib/navigation";
+import "@/styles/global.css";
+
+const { title = "MTG Card Forge", description = "Search and organize Magic card data." } =
+  Astro.props;
+const faviconHref = typeof faviconUrl === "string" ? faviconUrl : faviconUrl.src;
+const logoSrc = typeof logoUrl === "string" ? logoUrl : logoUrl.src;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="description" content={description} />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href={faviconHref} />
+    <title>{title}</title>
+  </head>
+  <body>
+    <nav class="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
+      <div class="relative mx-auto flex min-h-16 max-w-7xl items-center justify-center px-4 py-3 sm:px-6 lg:px-8">
+        <a class="absolute left-4 flex items-center gap-2 sm:left-6 lg:left-8" href="/" aria-label="MTG Card Forge">
+          <img alt="" class="h-10 w-auto" src={logoSrc} />
+        </a>
+        <div class="absolute right-4 hidden items-center gap-0.5 text-sm font-medium lg:flex xl:gap-1">
+          {
+            NAV_ITEMS.map((item) => (
+              <a
+                class="rounded-md px-2 py-2 text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring xl:px-3"
+                href={item.href}
+              >
+                {item.label}
+              </a>
+            ))
+          }
+        </div>
+      </div>
+    </nav>
+    <main>
+      <slot />
+    </main>
+    <SiteFooter />
+  </body>
+</html>
