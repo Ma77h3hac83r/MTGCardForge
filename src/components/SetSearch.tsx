@@ -1,6 +1,6 @@
 import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { SetSymbol } from "@/components/CardSymbols";
+import { ManaSymbols, SetSymbol } from "@/components/CardSymbols";
 import { CardTile } from "@/components/CardDisplay";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +19,25 @@ import {
 import type { CardSearchResult } from "@/lib/scryfall";
 
 type SearchState = "idle" | "loading" | "results" | "empty" | "error";
+type RarityFilter = "common" | "uncommon" | "rare" | "mythic" | "special";
+type ColorFilter = "W" | "U" | "B" | "R" | "G" | "colorless";
+
+const RARITY_FILTERS: Array<{ label: string; value: RarityFilter }> = [
+  { label: "Common", value: "common" },
+  { label: "Uncommon", value: "uncommon" },
+  { label: "Rare", value: "rare" },
+  { label: "Mythic", value: "mythic" },
+  { label: "Special", value: "special" },
+];
+
+const COLOR_FILTERS: Array<{ label: string; value: ColorFilter; symbol: string }> = [
+  { label: "White", value: "W", symbol: "{W}" },
+  { label: "Blue", value: "U", symbol: "{U}" },
+  { label: "Black", value: "B", symbol: "{B}" },
+  { label: "Red", value: "R", symbol: "{R}" },
+  { label: "Green", value: "G", symbol: "{G}" },
+  { label: "Colorless", value: "colorless", symbol: "{C}" },
+];
 
 export function SetSearch() {
   const [sets, setSets] = useState<ScryfallSet[]>([]);
@@ -27,7 +46,9 @@ export function SetSearch() {
   const [rootSet, setRootSet] = useState<ScryfallSet | null>(null);
   const [relatedSets, setRelatedSets] = useState<ScryfallSet[]>([]);
   const [cards, setCards] = useState<CardSearchResult[]>([]);
-  const [activeFilter, setActiveFilter] = useState<SetSearchFilter>("all");
+  const [activeFilters, setActiveFilters] = useState<SetSearchFilter[]>(["all"]);
+  const [activeRarities, setActiveRarities] = useState<RarityFilter[]>([]);
+  const [activeColors, setActiveColors] = useState<ColorFilter[]>([]);
   const [cardsLoading, setCardsLoading] = useState(false);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [message, setMessage] = useState("");
@@ -54,7 +75,9 @@ export function SetSearch() {
       setRootSet(null);
       setRelatedSets([]);
       setCards([]);
-      setActiveFilter("all");
+      setActiveFilters(["all"]);
+      setActiveRarities([]);
+      setActiveColors([]);
       setMessage(nextQuery.trim() ? `No set found for "${nextQuery.trim()}".` : "");
       return;
     }
@@ -64,7 +87,9 @@ export function SetSearch() {
     setRootSet(resolvedSet.rootSet);
     setRelatedSets(resolvedSet.relatedSets);
     setCards([]);
-    setActiveFilter("all");
+    setActiveFilters(["all"]);
+    setActiveRarities([]);
+    setActiveColors([]);
     setSuggestionsOpen(false);
     setMessage("");
 
@@ -82,18 +107,18 @@ export function SetSearch() {
     }
   }
 
-  async function updateFilter(nextFilter: SetSearchFilter) {
-    if (!relatedSets.length || nextFilter === activeFilter) {
+  async function updateFilters(nextFilters: SetSearchFilter[]) {
+    if (!relatedSets.length || areSameFilters(nextFilters, activeFilters)) {
       return;
     }
 
     const controller = new AbortController();
-    setActiveFilter(nextFilter);
+    setActiveFilters(nextFilters);
     setCards([]);
     setCardsLoading(true);
 
     try {
-      const result = await fetchSetCards(relatedSets, nextFilter, controller.signal);
+      const result = await fetchSetCards(relatedSets, nextFilters, controller.signal);
       setCards(result.cards);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -106,16 +131,38 @@ export function SetSearch() {
     }
   }
 
+  function toggleFrameFilter(nextFilter: SetSearchFilter) {
+    const nextFilters = getNextFrameFilters(activeFilters, nextFilter);
+    void updateFilters(nextFilters);
+  }
+
+  function toggleRarity(nextRarity: RarityFilter) {
+    setActiveRarities((currentRarities) =>
+      currentRarities.includes(nextRarity)
+        ? currentRarities.filter((rarity) => rarity !== nextRarity)
+        : [...currentRarities, nextRarity],
+    );
+  }
+
+  function toggleColor(nextColor: ColorFilter) {
+    setActiveColors((currentColors) =>
+      currentColors.includes(nextColor)
+        ? currentColors.filter((color) => color !== nextColor)
+        : [...currentColors, nextColor],
+    );
+  }
+
   return (
     <>
       <nav className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
         <div className="relative mx-auto flex min-h-16 max-w-7xl items-center justify-center px-4 py-3 sm:px-6 lg:px-8">
           <a
-            className="absolute left-4 flex items-center gap-2 sm:left-6 lg:left-8"
+            className="absolute left-4 flex items-center gap-2 text-lg font-semibold tracking-normal text-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:left-6 lg:left-8"
             href="/"
             aria-label="MTG Card Forge"
           >
             <img alt="" className="h-10 w-auto" src={logoUrl.src ?? logoUrl} />
+            <span>MTG Card Forge</span>
           </a>
           <div className="absolute right-4 hidden items-center gap-0.5 text-sm font-medium lg:flex xl:gap-1">
             {NAV_ITEMS.map((item) => (
@@ -209,10 +256,14 @@ export function SetSearch() {
           <>
             <SetStats cards={cards} relatedSets={relatedSets} rootSet={rootSet} />
             <SetCards
-              activeFilter={activeFilter}
+              activeColors={activeColors}
+              activeFilters={activeFilters}
+              activeRarities={activeRarities}
               cards={cards}
               isLoading={cardsLoading}
-              onFilterChange={(filter) => void updateFilter(filter)}
+              onColorToggle={toggleColor}
+              onFilterToggle={toggleFrameFilter}
+              onRarityToggle={toggleRarity}
               relatedSets={relatedSets}
             />
           </>
@@ -293,44 +344,64 @@ function SetStats({
 }
 
 function SetCards({
-  activeFilter,
+  activeColors,
+  activeFilters,
+  activeRarities,
   cards,
   isLoading,
-  onFilterChange,
+  onColorToggle,
+  onFilterToggle,
+  onRarityToggle,
   relatedSets,
 }: {
-  activeFilter: SetSearchFilter;
+  activeColors: ColorFilter[];
+  activeFilters: SetSearchFilter[];
+  activeRarities: RarityFilter[];
   cards: CardSearchResult[];
   isLoading: boolean;
-  onFilterChange: (filter: SetSearchFilter) => void;
+  onColorToggle: (color: ColorFilter) => void;
+  onFilterToggle: (filter: SetSearchFilter) => void;
+  onRarityToggle: (rarity: RarityFilter) => void;
   relatedSets: ScryfallSet[];
 }) {
-  const cardGroups = groupCardsBySet(cards, relatedSets);
+  const filteredCards = filterCards(cards, activeRarities, activeColors);
+  const cardGroups = groupCardsBySet(filteredCards, relatedSets);
 
   return (
     <section className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-xl font-semibold tracking-normal">Cards</h2>
           <p className="text-sm text-muted-foreground">
-            {isLoading ? "Loading cards" : `${cards.length} ${cards.length === 1 ? "card" : "cards"}`}
+            {isLoading ? "Loading cards" : `${filteredCards.length} ${filteredCards.length === 1 ? "card" : "cards"}`}
           </p>
           {cardGroups.length > 1 && <SetTableOfContents groups={cardGroups} />}
         </div>
-        <div className="inline-flex flex-wrap rounded-lg border bg-card p-1" role="group" aria-label="Set card filters">
-          {SET_CARD_FILTERS.map((filter) => (
-            <Button
-              aria-pressed={activeFilter === filter.value}
-              className="h-8 px-3"
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <CheckboxFilterGroup
               disabled={isLoading}
-              key={filter.value}
-              onClick={() => onFilterChange(filter.value)}
-              type="button"
-              variant={activeFilter === filter.value ? "default" : "ghost"}
-            >
-              {filter.label}
-            </Button>
-          ))}
+              label="Frame"
+              onToggle={onFilterToggle}
+              options={SET_CARD_FILTERS}
+              selectedValues={activeFilters}
+            />
+          </div>
+          <CheckboxFilterGroup
+            disabled={isLoading}
+            label="Rarity"
+            onToggle={onRarityToggle}
+            options={RARITY_FILTERS}
+            selectedValues={activeRarities}
+          />
+          <CheckboxFilterGroup
+            disabled={isLoading}
+            label="Color"
+            onToggle={onColorToggle}
+            options={COLOR_FILTERS}
+            selectedValues={activeColors}
+            showManaSymbols
+          />
         </div>
       </div>
 
@@ -340,7 +411,7 @@ function SetCards({
             <div className="aspect-[5/7] animate-pulse rounded-lg border bg-card" key={index} />
           ))}
         </div>
-      ) : cards.length ? (
+      ) : filteredCards.length ? (
         <div className="space-y-8">
           {cardGroups.map((group) => (
             <div className="scroll-mt-24 space-y-4" id={getSetSectionId(group.set.code)} key={group.set.code}>
@@ -395,6 +466,69 @@ function SetTableOfContents({ groups }: { groups: Array<{ set: ScryfallSet; card
   );
 }
 
+function CheckboxFilterGroup<T extends string>({
+  disabled,
+  label,
+  onToggle,
+  options,
+  selectedValues,
+  showManaSymbols = false,
+}: {
+  disabled: boolean;
+  label: string;
+  onToggle: (value: T) => void;
+  options: Array<{ label: string; value: T; symbol?: string }>;
+  selectedValues: T[];
+  showManaSymbols?: boolean;
+}) {
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium">{label}</legend>
+      <div className="flex flex-wrap gap-3">
+        {options.map((option) => (
+          <label
+            className="inline-flex h-8 items-center gap-2 rounded-md border bg-card px-3 text-sm transition-colors hover:bg-muted"
+            key={option.value}
+          >
+            <input
+              checked={selectedValues.includes(option.value)}
+              className="h-4 w-4 rounded border-input accent-primary disabled:cursor-not-allowed"
+              disabled={disabled}
+              onChange={() => onToggle(option.value)}
+              type="checkbox"
+            />
+            {showManaSymbols && option.symbol ? (
+              <ManaSymbols
+                className="text-base"
+                symbolClassName="text-base"
+                value={option.symbol}
+              />
+            ) : null}
+            <span className={showManaSymbols ? "sr-only" : undefined}>{option.label}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
+function filterCards(cards: CardSearchResult[], rarities: RarityFilter[], colors: ColorFilter[]) {
+  return cards.filter((card) => {
+    const matchesRarity = !rarities.length || rarities.includes(card.rarity.toLowerCase() as RarityFilter);
+    const matchesColor = !colors.length || getCardColorKey(card.colors) === getSelectedColorKey(colors);
+
+    return matchesRarity && matchesColor;
+  });
+}
+
+function getCardColorKey(colors: string[]) {
+  return colors.length ? [...colors].sort().join(",") : "colorless";
+}
+
+function getSelectedColorKey(colors: ColorFilter[]) {
+  return [...colors].sort().join(",");
+}
+
 function groupCardsBySet(cards: CardSearchResult[], relatedSets: ScryfallSet[]) {
   const setsByCode = new Map(relatedSets.map((set) => [set.code.toUpperCase(), set]));
 
@@ -431,6 +565,23 @@ function groupCardsBySet(cards: CardSearchResult[], relatedSets: ScryfallSet[]) 
 
 function getSetSectionId(code: string) {
   return `set-section-${code.toLowerCase()}`;
+}
+
+function getNextFrameFilters(activeFilters: SetSearchFilter[], nextFilter: SetSearchFilter) {
+  if (nextFilter === "all") {
+    return ["all"];
+  }
+
+  const filtersWithoutAll = activeFilters.filter((filter) => filter !== "all");
+  const nextFilters = filtersWithoutAll.includes(nextFilter)
+    ? filtersWithoutAll.filter((filter) => filter !== nextFilter)
+    : [...filtersWithoutAll, nextFilter];
+
+  return nextFilters.length ? nextFilters : ["all"];
+}
+
+function areSameFilters(first: SetSearchFilter[], second: SetSearchFilter[]) {
+  return first.length === second.length && first.every((filter) => second.includes(filter));
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import logoUrl from "@/images/logo.png";
 import { DECK_GROUPS, groupDeckCards, parseDeckInput, resolveDeckCards, type DeckResolvedCard } from "@/lib/deckSearch";
 import { NAV_ITEMS } from "@/lib/navigation";
+import type { CardSearchResult } from "@/lib/scryfall";
+import { fetchTokensAndEmblemsForCardNames } from "@/lib/tokenSearch";
 
 type DeckState = "idle" | "loading" | "results" | "empty" | "error";
 
@@ -13,6 +15,7 @@ export function DeckBuilder() {
   const [input, setInput] = useState("");
   const [state, setState] = useState<DeckState>("idle");
   const [cards, setCards] = useState<DeckResolvedCard[]>([]);
+  const [tokens, setTokens] = useState<CardSearchResult[]>([]);
   const [message, setMessage] = useState("");
 
   async function loadDeck() {
@@ -21,6 +24,7 @@ export function DeckBuilder() {
     if (!trimmedInput) {
       setState("idle");
       setCards([]);
+      setTokens([]);
       setMessage("");
       return;
     }
@@ -28,6 +32,7 @@ export function DeckBuilder() {
     const controller = new AbortController();
     setState("loading");
     setCards([]);
+    setTokens([]);
     setMessage("");
 
     try {
@@ -40,7 +45,9 @@ export function DeckBuilder() {
       }
 
       const resolvedCards = await resolveDeckCards(parsedCards, controller.signal);
+      const tokenCards = await fetchTokensAndEmblemsForCardNames(parsedCards.map((card) => card.name), controller.signal);
       setCards(resolvedCards);
+      setTokens(tokenCards);
       setState("results");
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -56,8 +63,13 @@ export function DeckBuilder() {
     <>
       <nav className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
         <div className="relative mx-auto flex min-h-16 max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
-          <a className="flex items-center gap-2" href="/" aria-label="MTG Card Forge">
+          <a
+            className="flex items-center gap-2 text-lg font-semibold tracking-normal text-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            href="/"
+            aria-label="MTG Card Forge"
+          >
             <img alt="" className="h-10 w-auto" src={logoUrl.src ?? logoUrl} />
+            <span>MTG Card Forge</span>
           </a>
           <div className="hidden items-center gap-0.5 text-sm font-medium lg:flex xl:gap-1">
             {NAV_ITEMS.map((item) => (
@@ -113,7 +125,7 @@ export function DeckBuilder() {
 
         <DeckStatus message={message} state={state} />
 
-        {state === "results" && <DeckResults cards={cards} />}
+        {state === "results" && <DeckResults cards={cards} tokens={tokens} />}
       </section>
     </>
   );
@@ -144,10 +156,15 @@ function DeckStatus({ state, message }: { state: DeckState; message: string }) {
   return null;
 }
 
-function DeckResults({ cards }: { cards: DeckResolvedCard[] }) {
+function DeckResults({ cards, tokens }: { cards: DeckResolvedCard[]; tokens: CardSearchResult[] }) {
   const groups = groupDeckCards(cards);
   const cardCount = cards.reduce((total, card) => total + card.quantity, 0);
   const unresolvedCount = cards.filter((card) => !card.card).length;
+  const tokenDeckCards = tokens.map((token) => ({
+    name: token.name,
+    quantity: 1,
+    card: token,
+  }));
 
   return (
     <section className="space-y-6">
@@ -156,9 +173,10 @@ function DeckResults({ cards }: { cards: DeckResolvedCard[] }) {
           <CardTitle className="text-xl">Deck Summary</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-3 text-sm sm:grid-cols-3">
+          <div className="grid gap-3 text-sm sm:grid-cols-4">
             <Stat label="Cards" value={cardCount.toString()} />
             <Stat label="Unique cards" value={cards.length.toString()} />
+            <Stat label="Tokens" value={tokens.length.toString()} />
             <Stat label="Unresolved" value={unresolvedCount.toString()} />
           </div>
         </CardContent>
@@ -175,6 +193,14 @@ function DeckResults({ cards }: { cards: DeckResolvedCard[] }) {
             {group.label}
           </a>
         ))}
+        {tokens.length > 0 && (
+          <a
+            className="rounded-sm border bg-card px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            href="#deck-section-tokens"
+          >
+            Tokens
+          </a>
+        )}
       </div>
 
       <div className="space-y-8">
@@ -187,6 +213,9 @@ function DeckResults({ cards }: { cards: DeckResolvedCard[] }) {
 
           return <DeckSection cards={groupCards} key={group.key} label={group.label} sectionId={`deck-section-${group.key}`} />;
         })}
+        {tokenDeckCards.length > 0 && (
+          <DeckSection cards={tokenDeckCards} label="Tokens" sectionId="deck-section-tokens" />
+        )}
       </div>
     </section>
   );
@@ -223,7 +252,7 @@ function DeckSection({
       </div>
       <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {cards.map((deckCard) => (
-          <DeckCardTile deckCard={deckCard} key={deckCard.name} />
+          <DeckCardTile deckCard={deckCard} key={`${deckCard.name}-${deckCard.card?.id ?? "unresolved"}`} />
         ))}
       </div>
     </div>

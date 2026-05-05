@@ -1,10 +1,11 @@
 import { Search } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SetSymbol } from "@/components/CardSymbols";
 import { CardDetail, CardTile } from "@/components/CardDisplay";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import logoUrl from "@/images/logo.png";
+import { fetchCardNameSuggestions } from "@/lib/autocomplete";
 import { NAV_ITEMS } from "@/lib/navigation";
 import {
   fetchCardPrintings,
@@ -27,10 +28,45 @@ export function TokenSearch() {
   const [selectedToken, setSelectedToken] = useState<CardSearchResult | null>(null);
   const [tokenPrintings, setTokenPrintings] = useState<CardSearchResult[]>([]);
   const [producers, setProducers] = useState<CardSearchResult[]>([]);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [message, setMessage] = useState("");
   const otherTokenPrintings = selectedToken
     ? tokenPrintings.filter((printing) => printing.id !== selectedToken.id)
     : tokenPrintings;
+
+  useEffect(() => {
+    const trimmedQuery = query.trim();
+
+    if (trimmedQuery.length < 2 || state === "loading") {
+      setSuggestions([]);
+      setSuggestionsOpen(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      try {
+        const sortedSuggestions = await fetchCardNameSuggestions(trimmedQuery, controller.signal, {
+          includeExtras: true,
+        });
+        setSuggestions(sortedSuggestions);
+        setSuggestionsOpen(sortedSuggestions.length > 0);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        setSuggestions([]);
+        setSuggestionsOpen(false);
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [query, state]);
 
   async function runSearch(nextQuery = query) {
     if (!nextQuery.trim()) {
@@ -41,6 +77,8 @@ export function TokenSearch() {
     const controller = new AbortController();
     setState("loading");
     setMessage("");
+    setSuggestions([]);
+    setSuggestionsOpen(false);
     setSourceCard(null);
     setSourcePrintings([]);
     setTokens([]);
@@ -93,6 +131,8 @@ export function TokenSearch() {
     setSelectedToken(null);
     setTokenPrintings([]);
     setProducers([]);
+    setSuggestions([]);
+    setSuggestionsOpen(false);
     setMessage("");
   }
 
@@ -101,11 +141,12 @@ export function TokenSearch() {
       <nav className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
         <div className="relative mx-auto flex min-h-16 max-w-7xl items-center justify-center px-4 py-3 sm:px-6 lg:px-8">
           <a
-            className="absolute left-4 flex items-center gap-2 sm:left-6 lg:left-8"
+            className="absolute left-4 flex items-center gap-2 text-lg font-semibold tracking-normal text-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:left-6 lg:left-8"
             href="/"
             aria-label="MTG Card Forge"
           >
             <img alt="" className="h-10 w-auto" src={logoUrl.src ?? logoUrl} />
+            <span>MTG Card Forge</span>
           </a>
           <div className="absolute right-4 hidden items-center gap-0.5 text-sm font-medium lg:flex xl:gap-1">
             {NAV_ITEMS.map((item) => (
@@ -131,12 +172,50 @@ export function TokenSearch() {
             </label>
             <Input
               id="token-search"
+              aria-autocomplete="list"
+              aria-controls="token-search-suggestions"
+              aria-expanded={suggestionsOpen}
               autoComplete="off"
               className="pr-12"
               placeholder="Token or token-making card"
+              role="combobox"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onBlur={() => {
+                window.setTimeout(() => setSuggestionsOpen(false), 120);
+              }}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSuggestionsOpen(true);
+              }}
+              onFocus={() => {
+                if (suggestions.length) {
+                  setSuggestionsOpen(true);
+                }
+              }}
             />
+            {suggestionsOpen && (
+              <div
+                className="absolute left-0 right-0 top-12 z-30 overflow-hidden rounded-lg border bg-card shadow-lg"
+                id="token-search-suggestions"
+                role="listbox"
+              >
+                {suggestions.map((suggestion) => (
+                  <button
+                    className="block w-full px-3 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                    key={suggestion}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      setQuery(suggestion);
+                      void runSearch(suggestion);
+                    }}
+                    role="option"
+                    type="button"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
             <Button
               aria-label="Search"
               className="absolute right-1 top-1/2 h-9 w-9 -translate-y-1/2"
@@ -161,7 +240,7 @@ export function TokenSearch() {
             )}
 
             {(mode === "card" || tokens.length > 1) && tokens.length > 0 && (
-              <TokenVersionPicker
+              <ProducedObjectPicker
                 mode={mode}
                 onSelect={(token) => void selectToken(token)}
                 selectedToken={selectedToken}
@@ -208,7 +287,7 @@ function TokenStatus({ state, message }: { state: SearchState; message: string }
   return null;
 }
 
-function TokenVersionPicker({
+function ProducedObjectPicker({
   mode,
   onSelect,
   selectedToken,
@@ -223,7 +302,7 @@ function TokenVersionPicker({
     <section className="space-y-4">
       <div>
         <h2 className="text-xl font-semibold tracking-normal">
-          {mode === "card" ? "Tokens Created" : "Token Versions"}
+          {mode === "card" ? "Tokens and Emblems Created" : "Token Versions"}
         </h2>
         <p className="text-sm text-muted-foreground">{tokens.length} {tokens.length === 1 ? "token" : "tokens"}</p>
       </div>

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import logoUrl from "@/images/logo.png";
+import { fetchArtistNameSuggestions } from "@/lib/autocomplete";
 import { fetchArtistCards, getArtistStats } from "@/lib/artistSearch";
 import { NAV_ITEMS } from "@/lib/navigation";
 import type { CardSearchResult } from "@/lib/scryfall";
@@ -16,6 +17,8 @@ export function ArtistSearch() {
   const [artistName, setArtistName] = useState("");
   const [state, setState] = useState<SearchState>("idle");
   const [cards, setCards] = useState<CardSearchResult[]>([]);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -28,6 +31,37 @@ export function ArtistSearch() {
     }
   }, []);
 
+  useEffect(() => {
+    const trimmedQuery = query.trim();
+
+    if (trimmedQuery.length < 2 || state === "loading") {
+      setSuggestions([]);
+      setSuggestionsOpen(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      try {
+        const sortedSuggestions = await fetchArtistNameSuggestions(trimmedQuery, controller.signal);
+        setSuggestions(sortedSuggestions);
+        setSuggestionsOpen(sortedSuggestions.length > 0);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        setSuggestions([]);
+        setSuggestionsOpen(false);
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [query, state]);
+
   async function searchArtist(nextQuery = query, options: { updateUrl?: boolean } = {}) {
     const trimmedQuery = nextQuery.trim();
 
@@ -35,6 +69,8 @@ export function ArtistSearch() {
       setState("idle");
       setArtistName("");
       setCards([]);
+      setSuggestions([]);
+      setSuggestionsOpen(false);
       setMessage("");
       return;
     }
@@ -43,6 +79,8 @@ export function ArtistSearch() {
     setState("loading");
     setArtistName(trimmedQuery);
     setCards([]);
+    setSuggestions([]);
+    setSuggestionsOpen(false);
     setMessage("");
 
     if (options.updateUrl !== false) {
@@ -71,11 +109,12 @@ export function ArtistSearch() {
       <nav className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
         <div className="relative mx-auto flex min-h-16 max-w-7xl items-center justify-center px-4 py-3 sm:px-6 lg:px-8">
           <a
-            className="absolute left-4 flex items-center gap-2 sm:left-6 lg:left-8"
+            className="absolute left-4 flex items-center gap-2 text-lg font-semibold tracking-normal text-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:left-6 lg:left-8"
             href="/"
             aria-label="MTG Card Forge"
           >
             <img alt="" className="h-10 w-auto" src={logoUrl.src ?? logoUrl} />
+            <span>MTG Card Forge</span>
           </a>
           <div className="absolute right-4 hidden items-center gap-0.5 text-sm font-medium lg:flex xl:gap-1">
             {NAV_ITEMS.map((item) => (
@@ -101,12 +140,50 @@ export function ArtistSearch() {
             </label>
             <Input
               id="artist-search"
+              aria-autocomplete="list"
+              aria-controls="artist-search-suggestions"
+              aria-expanded={suggestionsOpen}
               autoComplete="off"
               className="pr-12"
               placeholder="Artist name"
+              role="combobox"
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onBlur={() => {
+                window.setTimeout(() => setSuggestionsOpen(false), 120);
+              }}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setSuggestionsOpen(true);
+              }}
+              onFocus={() => {
+                if (suggestions.length) {
+                  setSuggestionsOpen(true);
+                }
+              }}
             />
+            {suggestionsOpen && (
+              <div
+                className="absolute left-0 right-0 top-12 z-30 overflow-hidden rounded-lg border bg-card shadow-lg"
+                id="artist-search-suggestions"
+                role="listbox"
+              >
+                {suggestions.map((suggestion) => (
+                  <button
+                    className="block w-full px-3 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
+                    key={suggestion}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      setQuery(suggestion);
+                      void searchArtist(suggestion);
+                    }}
+                    role="option"
+                    type="button"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
             <Button
               aria-label="Search"
               className="absolute right-1 top-1/2 h-9 w-9 -translate-y-1/2"

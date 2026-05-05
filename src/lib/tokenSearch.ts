@@ -18,8 +18,12 @@ export function getTokenParts(card: CardSearchResult) {
   return card.allParts.filter((part) => part.component === "token");
 }
 
+export function getTokenOrEmblemParts(card: CardSearchResult) {
+  return card.allParts.filter((part) => part.component === "token" || isEmblemTypeLine(part.type_line));
+}
+
 export function getProducerParts(token: CardSearchResult) {
-  return token.allParts.filter((part) => part.component !== "token");
+  return token.allParts.filter((part) => part.component !== "token" && !isEmblemTypeLine(part.type_line));
 }
 
 export async function searchTokenOrCard(query: string, signal?: AbortSignal): Promise<TokenSearchResult> {
@@ -35,7 +39,7 @@ export async function searchTokenOrCard(query: string, signal?: AbortSignal): Pr
     const sourceCard = normalizeScryfallCard(exactCard);
 
     if (!isTokenCard(sourceCard)) {
-      const tokenParts = getTokenParts(sourceCard);
+      const tokenParts = getTokenOrEmblemParts(sourceCard);
 
       if (tokenParts.length > 0) {
         const tokens = await fetchRelatedCards(tokenParts, signal);
@@ -66,6 +70,35 @@ export async function fetchTokenProducers(token: CardSearchResult, signal?: Abor
   return fetchRelatedCards(getProducerParts(token), signal);
 }
 
+export async function fetchTokensAndEmblemsForCards(cards: CardSearchResult[], signal?: AbortSignal) {
+  const tokenParts = cards.flatMap(getTokenOrEmblemParts);
+
+  if (!tokenParts.length) {
+    return [];
+  }
+
+  return dedupeTokenVariants(await fetchRelatedCards(tokenParts, signal));
+}
+
+export async function fetchTokensAndEmblemsForCardNames(cardNames: string[], signal?: AbortSignal) {
+  const cards: CardSearchResult[] = [];
+  const uniqueNames = Array.from(new Set(cardNames.map((name) => name.trim()).filter(Boolean)));
+
+  for (const [index, cardName] of uniqueNames.entries()) {
+    if (index > 0) {
+      await waitForScryfall(signal);
+    }
+
+    const exactCard = await fetchExactCard(cardName, signal);
+
+    if (exactCard) {
+      cards.push(normalizeScryfallCard(exactCard));
+    }
+  }
+
+  return fetchTokensAndEmblemsForCards(cards, signal);
+}
+
 export async function fetchCardPrintings(card: CardSearchResult, signal?: AbortSignal) {
   if (!card.printsSearchUri) {
     return [];
@@ -81,6 +114,10 @@ export function buildTokenSearchUrl(query: string) {
 
 function isTokenCard(card: CardSearchResult) {
   return card.layout === "token" || card.typeLine.toLowerCase().startsWith("token ");
+}
+
+function isEmblemTypeLine(typeLine: string) {
+  return /^\s*emblem\b/i.test(typeLine);
 }
 
 function dedupeTokenVariants(tokens: CardSearchResult[]) {
@@ -182,4 +219,23 @@ async function fetchAllCardPages(url: string, signal?: AbortSignal) {
   }
 
   return cards;
+}
+
+function waitForScryfall(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException("Aborted", "AbortError"));
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const timeout = globalThis.setTimeout(resolve, 100);
+
+    signal?.addEventListener(
+      "abort",
+      () => {
+        globalThis.clearTimeout(timeout);
+        reject(new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
 }

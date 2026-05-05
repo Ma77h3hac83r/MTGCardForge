@@ -4,6 +4,7 @@ import { CardDetail, CardTile } from "@/components/CardDisplay";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import logoUrl from "@/images/logo.png";
+import { fetchCardNameSuggestions } from "@/lib/autocomplete";
 import { NAV_ITEMS } from "@/lib/navigation";
 import {
   type CardSearchResult,
@@ -20,12 +21,6 @@ type ScryfallSearchResponse = {
   object: string;
   total_cards?: number;
   data?: ScryfallCard[];
-  details?: string;
-};
-
-type ScryfallAutocompleteResponse = {
-  object: string;
-  data?: string[];
   details?: string;
 };
 
@@ -60,7 +55,7 @@ export function CardSearch() {
   const [state, setState] = useState<SearchState>("idle");
   const [card, setCard] = useState<CardSearchResult | null>(null);
   const [printings, setPrintings] = useState<CardSearchResult[]>([]);
-  const [printingFilter, setPrintingFilter] = useState<PrintingFilter>("all");
+  const [printingFilters, setPrintingFilters] = useState<PrintingFilter[]>(["all"]);
   const [setTypeFilter, setSetTypeFilter] = useState<SetTypeFilter>("all");
   const [printingsLoading, setPrintingsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -79,24 +74,7 @@ export function CardSearch() {
     const controller = new AbortController();
     const timeout = window.setTimeout(async () => {
       try {
-        const response = await fetch(
-          `https://api.scryfall.com/cards/autocomplete?q=${encodeURIComponent(trimmedQuery)}`,
-          {
-            signal: controller.signal,
-            headers: {
-              Accept: "application/json",
-            },
-          },
-        );
-
-        if (!response.ok) {
-          setSuggestions([]);
-          setSuggestionsOpen(false);
-          return;
-        }
-
-        const payload = (await response.json()) as ScryfallAutocompleteResponse;
-        const sortedSuggestions = sortAutocompleteSuggestions(payload.data ?? [], trimmedQuery);
+        const sortedSuggestions = await fetchCardNameSuggestions(trimmedQuery, controller.signal);
         setSuggestions(sortedSuggestions);
         setSuggestionsOpen(sortedSuggestions.length > 0);
       } catch (error) {
@@ -122,7 +100,7 @@ export function CardSearch() {
       setState("idle");
       setCard(null);
       setPrintings([]);
-      setPrintingFilter("all");
+      setPrintingFilters(["all"]);
       setSetTypeFilter("all");
       setPrintingsLoading(false);
       setSuggestions([]);
@@ -135,7 +113,7 @@ export function CardSearch() {
     setState("loading");
     setCard(null);
     setPrintings([]);
-    setPrintingFilter("all");
+    setPrintingFilters(["all"]);
     setSetTypeFilter("all");
     setPrintingsLoading(false);
     setSuggestions([]);
@@ -190,18 +168,20 @@ export function CardSearch() {
   }
 
   async function updatePrintingFilters({
-    nextFrame = printingFilter,
+    nextFrame = printingFilters,
     nextSetType = setTypeFilter,
   }: {
-    nextFrame?: PrintingFilter;
+    nextFrame?: PrintingFilter | PrintingFilter[];
     nextSetType?: SetTypeFilter;
   }) {
-    if (!card || (nextFrame === printingFilter && nextSetType === setTypeFilter)) {
+    const nextFrameFilters = Array.isArray(nextFrame) ? nextFrame : [nextFrame];
+
+    if (!card || (areSameFilters(nextFrameFilters, printingFilters) && nextSetType === setTypeFilter)) {
       return;
     }
 
     const controller = new AbortController();
-    setPrintingFilter(nextFrame);
+    setPrintingFilters(nextFrameFilters);
     setSetTypeFilter(nextSetType);
     setPrintingsLoading(true);
     setPrintings([]);
@@ -223,16 +203,22 @@ export function CardSearch() {
     }
   }
 
+  function togglePrintingFrameFilter(nextFilter: PrintingFilter) {
+    const nextFilters = getNextFrameFilters(printingFilters, nextFilter);
+    void updatePrintingFilters({ nextFrame: nextFilters });
+  }
+
   return (
     <>
       <nav className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
         <div className="relative mx-auto flex min-h-16 max-w-7xl items-center justify-center px-4 py-3 sm:px-6 lg:px-8">
           <a
-            className="absolute left-4 flex items-center gap-2 sm:left-6 lg:left-8"
+            className="absolute left-4 flex items-center gap-2 text-lg font-semibold tracking-normal text-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:left-6 lg:left-8"
             href="/"
             aria-label="MTG Card Forge"
           >
             <img alt="" className="h-10 w-auto" src={logoUrl.src ?? logoUrl} />
+            <span>MTG Card Forge</span>
           </a>
           <div className="absolute right-4 hidden items-center gap-0.5 text-sm font-medium lg:flex xl:gap-1">
             {NAV_ITEMS.map((item) => (
@@ -322,11 +308,11 @@ export function CardSearch() {
           <>
             <CardDetail artistValue={<ArtistLink artist={card.artist} />} card={card} showLegalities showTcgplayer />
             <PrintingsGrid
-              activeFrameFilter={printingFilter}
+              activeFrameFilters={printingFilters}
               activeSetTypeFilter={setTypeFilter}
               activePrintingId={card.id}
               isLoading={printingsLoading}
-              onFrameFilterChange={(filter) => void updatePrintingFilters({ nextFrame: filter })}
+              onFrameFilterChange={togglePrintingFrameFilter}
               onPrintingSelect={setCard}
               onSetTypeFilterChange={(filter) =>
                 void updatePrintingFilters({ nextSetType: filter })
@@ -343,7 +329,7 @@ export function CardSearch() {
 async function fetchPrintings(
   card: CardSearchResult,
   signal: AbortSignal,
-  filters: { frame: PrintingFilter; setType: SetTypeFilter },
+  filters: { frame: PrintingFilter | PrintingFilter[]; setType: SetTypeFilter },
 ) {
   if (!card.printsSearchUri) {
     return [];
@@ -371,13 +357,13 @@ async function fetchPrintings(
 
 function getPrintingsSearchUri(
   printsSearchUri: string,
-  filters: { frame: PrintingFilter; setType: SetTypeFilter },
+  filters: { frame: PrintingFilter | PrintingFilter[]; setType: SetTypeFilter },
 ) {
-  const frameFilter = PRINTING_FILTERS.find((item) => item.value === filters.frame);
+  const frameSyntax = buildFilterSyntax(filters.frame, PRINTING_FILTERS);
   const setTypeFilter = SET_TYPE_FILTERS.find((item) => item.value === filters.setType);
   const url = new URL(printsSearchUri);
   const currentQuery = url.searchParams.get("q");
-  const queryParts = [currentQuery, "game:paper", frameFilter?.syntax, setTypeFilter?.syntax].filter(
+  const queryParts = [currentQuery, "game:paper", frameSyntax, setTypeFilter?.syntax].filter(
     (part): part is string => Boolean(part),
   );
   url.searchParams.set("q", queryParts.join(" "));
@@ -385,35 +371,21 @@ function getPrintingsSearchUri(
   return url.toString();
 }
 
-function sortAutocompleteSuggestions(names: string[], query: string) {
-  const normalizedQuery = query.trim().toLowerCase();
+function buildFilterSyntax<TValue extends string>(
+  filters: TValue | TValue[],
+  filterConfigs: Array<{ label: string; value: TValue; syntax: string | null }>,
+) {
+  const selectedFilters = Array.isArray(filters) ? filters : [filters];
+  const syntaxes = selectedFilters
+    .filter((filter) => filter !== "all")
+    .map((filter) => filterConfigs.find((item) => item.value === filter)?.syntax)
+    .filter((syntax): syntax is string => Boolean(syntax));
 
-  return [...names]
-    .sort((first, second) => {
-      const firstRank = getAutocompleteRank(first, normalizedQuery);
-      const secondRank = getAutocompleteRank(second, normalizedQuery);
-
-      if (firstRank !== secondRank) {
-        return firstRank - secondRank;
-      }
-
-      return first.localeCompare(second);
-    })
-    .slice(0, 12);
-}
-
-function getAutocompleteRank(name: string, normalizedQuery: string) {
-  const normalizedName = name.toLowerCase();
-
-  if (normalizedName.startsWith(normalizedQuery)) {
-    return 0;
+  if (!syntaxes.length) {
+    return null;
   }
 
-  if (normalizedName.includes(normalizedQuery)) {
-    return 1;
-  }
-
-  return 2;
+  return syntaxes.length === 1 ? syntaxes[0] : `(${syntaxes.join(" OR ")})`;
 }
 
 function StatusPanel({ state, message }: { state: SearchState; message: string }) {
@@ -449,7 +421,7 @@ function StatusPanel({ state, message }: { state: SearchState; message: string }
 }
 
 function PrintingsGrid({
-  activeFrameFilter,
+  activeFrameFilters,
   activePrintingId,
   activeSetTypeFilter,
   isLoading,
@@ -458,7 +430,7 @@ function PrintingsGrid({
   onSetTypeFilterChange,
   printings,
 }: {
-  activeFrameFilter: PrintingFilter;
+  activeFrameFilters: PrintingFilter[];
   activePrintingId: string;
   activeSetTypeFilter: SetTypeFilter;
   isLoading: boolean;
@@ -471,7 +443,7 @@ function PrintingsGrid({
     return (
       <section className="space-y-4">
         <PrintingsHeader
-          activeFrameFilter={activeFrameFilter}
+          activeFrameFilters={activeFrameFilters}
           activeSetTypeFilter={activeSetTypeFilter}
           count={0}
           isLoading={isLoading}
@@ -492,7 +464,7 @@ function PrintingsGrid({
   return (
     <section className="space-y-4">
       <PrintingsHeader
-        activeFrameFilter={activeFrameFilter}
+        activeFrameFilters={activeFrameFilters}
         activeSetTypeFilter={activeSetTypeFilter}
         count={printings.length}
         isLoading={isLoading}
@@ -534,14 +506,14 @@ function ArtistLink({ artist }: { artist: string | null }) {
 
 
 function PrintingsHeader({
-  activeFrameFilter,
+  activeFrameFilters,
   activeSetTypeFilter,
   count,
   isLoading,
   onFrameFilterChange,
   onSetTypeFilterChange,
 }: {
-  activeFrameFilter: PrintingFilter;
+  activeFrameFilters: PrintingFilter[];
   activeSetTypeFilter: SetTypeFilter;
   count: number;
   isLoading: boolean;
@@ -556,13 +528,13 @@ function PrintingsHeader({
           {isLoading ? "Loading printings" : `${count} ${count === 1 ? "printing" : "printings"}`}
         </p>
       </div>
-      <div className="flex flex-wrap justify-end gap-2">
-        <SegmentedFilter
-          activeValue={activeFrameFilter}
-          ariaLabel="Frame filters"
+      <div className="flex flex-wrap items-end justify-end gap-4">
+        <CheckboxFilterGroup
           disabled={isLoading}
+          label="Frame"
           filters={PRINTING_FILTERS}
-          onChange={onFrameFilterChange}
+          onToggle={onFrameFilterChange}
+          selectedValues={activeFrameFilters}
         />
         <SegmentedFilter
           activeValue={activeSetTypeFilter}
@@ -573,6 +545,43 @@ function PrintingsHeader({
         />
       </div>
     </div>
+  );
+}
+
+function CheckboxFilterGroup<TValue extends string>({
+  disabled,
+  filters,
+  label,
+  onToggle,
+  selectedValues,
+}: {
+  disabled: boolean;
+  filters: Array<{ label: string; value: TValue; syntax: string | null }>;
+  label: string;
+  onToggle: (filter: TValue) => void;
+  selectedValues: TValue[];
+}) {
+  return (
+    <fieldset className="space-y-2">
+      <legend className="text-sm font-medium">{label}</legend>
+      <div className="flex flex-wrap gap-3">
+        {filters.map((filter) => (
+          <label
+            className="inline-flex h-8 items-center gap-2 rounded-md border bg-card px-3 text-sm transition-colors hover:bg-muted"
+            key={filter.value}
+          >
+            <input
+              checked={selectedValues.includes(filter.value)}
+              className="h-4 w-4 rounded border-input accent-primary disabled:cursor-not-allowed"
+              disabled={disabled}
+              onChange={() => onToggle(filter.value)}
+              type="checkbox"
+            />
+            <span>{filter.label}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
@@ -606,6 +615,23 @@ function SegmentedFilter<TValue extends string>({
       ))}
     </div>
   );
+}
+
+function getNextFrameFilters(activeFilters: PrintingFilter[], nextFilter: PrintingFilter) {
+  if (nextFilter === "all") {
+    return ["all"];
+  }
+
+  const filtersWithoutAll = activeFilters.filter((filter) => filter !== "all");
+  const nextFilters = filtersWithoutAll.includes(nextFilter)
+    ? filtersWithoutAll.filter((filter) => filter !== nextFilter)
+    : [...filtersWithoutAll, nextFilter];
+
+  return nextFilters.length ? nextFilters : ["all"];
+}
+
+function areSameFilters<TValue extends string>(first: TValue[], second: TValue[]) {
+  return first.length === second.length && first.every((filter) => second.includes(filter));
 }
 
 function PrintingsSkeleton() {

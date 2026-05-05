@@ -135,10 +135,10 @@ export function sortSetSuggestions(sets: ScryfallSet[], query: string) {
 
 export async function fetchSetCards(
   relatedSets: ScryfallSet[],
-  filter: SetSearchFilter,
+  filters: SetSearchFilter | SetSearchFilter[],
   signal?: AbortSignal,
 ) {
-  const query = buildSetCardsQuery(relatedSets, filter);
+  const query = buildSetCardsQuery(relatedSets, filters);
   const cards = await fetchAllCardPages(
     `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints&order=set`,
     signal,
@@ -147,13 +147,27 @@ export async function fetchSetCards(
   return { cards: sortCardsByRelatedSetOrder(normalizeScryfallCards(cards), relatedSets), query };
 }
 
-export function buildSetCardsQuery(relatedSets: ScryfallSet[], filter: SetSearchFilter) {
+export function buildSetCardsQuery(relatedSets: ScryfallSet[], filters: SetSearchFilter | SetSearchFilter[]) {
   const setQuery = relatedSets.map((set) => `set:${set.code}`).join(" OR ");
-  const filterConfig = SET_CARD_FILTERS.find((item) => item.value === filter);
+  const filterSyntax = buildFilterSyntax(filters);
 
-  return [`(${setQuery})`, "game:paper", "-is:minigame", filterConfig?.syntax]
+  return [`(${setQuery})`, "game:paper", "-is:minigame", filterSyntax]
     .filter(Boolean)
     .join(" ");
+}
+
+function buildFilterSyntax(filters: SetSearchFilter | SetSearchFilter[]) {
+  const selectedFilters = Array.isArray(filters) ? filters : [filters];
+  const syntaxes = selectedFilters
+    .filter((filter) => filter !== "all")
+    .map((filter) => SET_CARD_FILTERS.find((item) => item.value === filter)?.syntax)
+    .filter((syntax): syntax is string => Boolean(syntax));
+
+  if (!syntaxes.length) {
+    return null;
+  }
+
+  return syntaxes.length === 1 ? syntaxes[0] : `(${syntaxes.join(" OR ")})`;
 }
 
 async function fetchAllCardPages(url: string, signal?: AbortSignal) {
