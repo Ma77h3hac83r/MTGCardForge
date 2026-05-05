@@ -80,25 +80,6 @@ export async function fetchTokensAndEmblemsForCards(cards: CardSearchResult[], s
   return dedupeTokenVariants(await fetchRelatedCards(tokenParts, signal));
 }
 
-export async function fetchTokensAndEmblemsForCardNames(cardNames: string[], signal?: AbortSignal) {
-  const cards: CardSearchResult[] = [];
-  const uniqueNames = Array.from(new Set(cardNames.map((name) => name.trim()).filter(Boolean)));
-
-  for (const [index, cardName] of uniqueNames.entries()) {
-    if (index > 0) {
-      await waitForScryfall(signal);
-    }
-
-    const exactCard = await fetchExactCard(cardName, signal);
-
-    if (exactCard) {
-      cards.push(normalizeScryfallCard(exactCard));
-    }
-  }
-
-  return fetchTokensAndEmblemsForCards(cards, signal);
-}
-
 export async function fetchCardPrintings(card: CardSearchResult, signal?: AbortSignal) {
   if (!card.printsSearchUri) {
     return [];
@@ -219,23 +200,4 @@ async function fetchAllCardPages(url: string, signal?: AbortSignal) {
   }
 
   return cards;
-}
-
-function waitForScryfall(signal?: AbortSignal) {
-  if (signal?.aborted) {
-    return Promise.reject(new DOMException("Aborted", "AbortError"));
-  }
-
-  return new Promise<void>((resolve, reject) => {
-    const timeout = globalThis.setTimeout(resolve, 100);
-
-    signal?.addEventListener(
-      "abort",
-      () => {
-        globalThis.clearTimeout(timeout);
-        reject(new DOMException("Aborted", "AbortError"));
-      },
-      { once: true },
-    );
-  });
 }

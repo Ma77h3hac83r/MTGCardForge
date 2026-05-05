@@ -79,6 +79,10 @@ export async function resolveDeckCards(cards: DeckInputCard[], signal?: AbortSig
   const fallbackCards = fallbackNames.length
     ? await fetchExactFallbackCards(fallbackNames, signal)
     : new Map<string, CardSearchResult>();
+  const fuzzyNames = fallbackNames.filter((name) => !fallbackCards.has(getCardNameKey(name)));
+  const fuzzyCards = fuzzyNames.length
+    ? await fetchFuzzyFallbackCards(fuzzyNames, signal)
+    : new Map<string, CardSearchResult>();
 
   return cards.map((card) => ({
     ...card,
@@ -86,6 +90,7 @@ export async function resolveDeckCards(cards: DeckInputCard[], signal?: AbortSig
       cheapestPrintings.get(getCardNameKey(card.name)) ??
       alternateNamePrintings.get(getCardNameKey(card.name)) ??
       fallbackCards.get(getCardNameKey(card.name)) ??
+      fuzzyCards.get(getCardNameKey(card.name)) ??
       null,
   }));
 }
@@ -251,7 +256,7 @@ function mergeCardQuantities(cards: DeckInputCard[]) {
   const mergedCards = new Map<string, DeckInputCard>();
 
   for (const card of cards) {
-    const key = card.name.toLowerCase();
+    const key = getCardNameKey(card.name);
     const existingCard = mergedCards.get(key);
 
     if (existingCard) {
@@ -382,7 +387,12 @@ function getArchidektCardName(entry: ArchidektDeckEntry) {
 }
 
 async function fetchExactFallback(cardName: string, signal?: AbortSignal) {
-  const response = await fetch(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cardName)}`, {
+  const card = await fetchNamedCard(cardName, "exact", signal);
+  return card ? normalizeScryfallCard(card) : null;
+}
+
+async function fetchNamedCard(cardName: string, mode: "exact" | "fuzzy", signal?: AbortSignal) {
+  const response = await fetch(`https://api.scryfall.com/cards/named?${mode}=${encodeURIComponent(cardName)}`, {
     signal,
     headers: {
       Accept: "application/json",
@@ -393,7 +403,7 @@ async function fetchExactFallback(cardName: string, signal?: AbortSignal) {
     return null;
   }
 
-  return normalizeScryfallCard((await response.json()) as ScryfallCard);
+  return (await response.json()) as ScryfallCard;
 }
 
 async function fetchExactFallbackCards(cardNames: string[], signal?: AbortSignal) {
@@ -425,6 +435,27 @@ async function fetchExactFallbackCards(cardNames: string[], signal?: AbortSignal
 
     for (const card of payload.data ?? []) {
       const normalizedCard = normalizeScryfallCard(card);
+      cards.set(getCardNameKey(normalizedCard.name), normalizedCard);
+    }
+  }
+
+  return cards;
+}
+
+async function fetchFuzzyFallbackCards(cardNames: string[], signal?: AbortSignal) {
+  const cards = new Map<string, CardSearchResult>();
+  const uniqueNames = Array.from(new Set(cardNames.map((name) => name.trim()).filter(Boolean)));
+
+  for (const [index, cardName] of uniqueNames.entries()) {
+    if (index > 0) {
+      await waitForScryfall(signal);
+    }
+
+    const fuzzyCard = await fetchNamedCard(cardName, "fuzzy", signal);
+
+    if (fuzzyCard) {
+      const normalizedCard = normalizeScryfallCard(fuzzyCard);
+      cards.set(getCardNameKey(cardName), normalizedCard);
       cards.set(getCardNameKey(normalizedCard.name), normalizedCard);
     }
   }
@@ -500,7 +531,11 @@ function chunkArray<T>(items: T[], chunkSize: number) {
 }
 
 function getCardNameKey(name: string) {
-  return name.toLowerCase();
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function quoteScryfallValue(value: string) {

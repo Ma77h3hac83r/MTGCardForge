@@ -1,13 +1,12 @@
 import { ClipboardList } from "lucide-react";
 import { useState } from "react";
+import { AppNav } from "@/components/AppNav";
 import { CardTile } from "@/components/CardDisplay";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import logoUrl from "@/images/logo.png";
 import { DECK_GROUPS, groupDeckCards, parseDeckInput, resolveDeckCards, type DeckResolvedCard } from "@/lib/deckSearch";
-import { NAV_ITEMS } from "@/lib/navigation";
 import type { CardSearchResult } from "@/lib/scryfall";
-import { fetchTokensAndEmblemsForCardNames } from "@/lib/tokenSearch";
+import { fetchTokensAndEmblemsForCards } from "@/lib/tokenSearch";
 
 type DeckState = "idle" | "loading" | "results" | "empty" | "error";
 
@@ -45,7 +44,10 @@ export function DeckBuilder() {
       }
 
       const resolvedCards = await resolveDeckCards(parsedCards, controller.signal);
-      const tokenCards = await fetchTokensAndEmblemsForCardNames(parsedCards.map((card) => card.name), controller.signal);
+      const resolvedCardData = resolvedCards
+        .map((card) => card.card)
+        .filter((card): card is CardSearchResult => Boolean(card));
+      const tokenCards = await fetchTokensAndEmblemsForCards(resolvedCardData, controller.signal);
       setCards(resolvedCards);
       setTokens(tokenCards);
       setState("results");
@@ -61,29 +63,7 @@ export function DeckBuilder() {
 
   return (
     <>
-      <nav className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
-        <div className="relative mx-auto flex min-h-16 max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
-          <a
-            className="flex items-center gap-2 text-lg font-semibold tracking-normal text-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            href="/"
-            aria-label="MTG Card Forge"
-          >
-            <img alt="" className="h-10 w-auto" src={logoUrl.src ?? logoUrl} />
-            <span>MTG Card Forge</span>
-          </a>
-          <div className="hidden items-center gap-0.5 text-sm font-medium lg:flex xl:gap-1">
-            {NAV_ITEMS.map((item) => (
-              <a
-                className="rounded-md px-2 py-2 text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring xl:px-3"
-                href={item.href}
-                key={item.href}
-              >
-                {item.label}
-              </a>
-            ))}
-          </div>
-        </div>
-      </nav>
+      <AppNav layout="split" />
 
       <section className="mx-auto w-full max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8" id="deck-page-top">
         <Card>

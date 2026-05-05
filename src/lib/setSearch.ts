@@ -73,8 +73,12 @@ export function resolveSetWithSubsets(sets: ScryfallSet[], query: string) {
     return null;
   }
 
+  const normalizedCodeFromLabel = getSetCodeFromSuggestionLabel(normalizedQuery);
   const selectedSet = sets.find(
-    (set) => set.code.toLowerCase() === normalizedQuery || set.name.toLowerCase() === normalizedQuery,
+    (set) =>
+      set.code.toLowerCase() === normalizedQuery ||
+      set.code.toLowerCase() === normalizedCodeFromLabel ||
+      set.name.toLowerCase() === normalizedQuery,
   );
 
   if (!selectedSet) {
@@ -107,6 +111,10 @@ export function resolveSetWithSubsets(sets: ScryfallSet[], query: string) {
   return { rootSet, relatedSets };
 }
 
+export function formatSetSuggestion(set: ScryfallSet) {
+  return `${set.name} (${set.code.toUpperCase()})`;
+}
+
 export function sortSetSuggestions(sets: ScryfallSet[], query: string) {
   const normalizedQuery = query.trim().toLowerCase();
 
@@ -131,6 +139,11 @@ export function sortSetSuggestions(sets: ScryfallSet[], query: string) {
       return (second.released_at ?? "").localeCompare(first.released_at ?? "");
     })
     .slice(0, 12);
+}
+
+function getSetCodeFromSuggestionLabel(normalizedQuery: string) {
+  const match = normalizedQuery.match(/\(([a-z0-9]+)\)$/);
+  return match?.[1] ?? null;
 }
 
 export async function fetchSetCards(
