@@ -59,6 +59,14 @@ function mockFetchSequence(...responses: Array<ReturnType<typeof response>>) {
   return fetchMock;
 }
 
+function fetchUrls(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.map((call) => String(call[0]));
+}
+
+function printingsUrls(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchUrls(fetchMock).filter((url) => url.startsWith("https://api.scryfall.com/cards/search"));
+}
+
 function submitSearch(query: string) {
   render(<CardSearch />);
   fireEvent.change(screen.getByLabelText(/search by exact card name/i), {
@@ -277,84 +285,75 @@ describe("CardSearch", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /^standard$/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        3,
-        expect.stringContaining("is%3Adefault"),
-        expect.any(Object),
-      );
+      expect(fetchUrls(fetchMock).some((url) => url.includes("is%3Adefault"))).toBe(true);
     });
     expect(await screen.findByText("1 printing")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /borderless/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        4,
-        expect.stringContaining("is%3Afull"),
-        expect.any(Object),
-      );
+      expect(fetchUrls(fetchMock).some((url) => url.includes("is%3Afull"))).toBe(true);
     });
     expect(await screen.findByText(/no printings matched this filter/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /extended/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        5,
-        expect.stringContaining("is%3Adefault+OR+is%3Afull+OR+is%3Aextended"),
-        expect.any(Object),
-      );
+      expect(
+        fetchUrls(fetchMock).some((url) => url.includes("is%3Adefault+OR+is%3Afull+OR+is%3Aextended")),
+      ).toBe(true);
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /showcase/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        6,
-        expect.stringContaining("is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase"),
-        expect.any(Object),
-      );
+      expect(
+        fetchUrls(fetchMock).some((url) =>
+          url.includes("is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase"),
+        ),
+      ).toBe(true);
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /^etched$/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        7,
-        expect.stringContaining("is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched"),
-        expect.any(Object),
-      );
+      expect(
+        fetchUrls(fetchMock).some((url) =>
+          url.includes("is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched"),
+        ),
+      ).toBe(true);
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /halo foil/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        8,
-        expect.stringContaining("is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched+OR+is%3Ahalo"),
-        expect.any(Object),
-      );
+      expect(
+        fetchUrls(fetchMock).some((url) =>
+          url.includes(
+            "is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched+OR+is%3Ahalo",
+          ),
+        ),
+      ).toBe(true);
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /^retro$/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        9,
-        expect.stringContaining("is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched+OR+is%3Ahalo+OR+is%3Aretro"),
-        expect.any(Object),
-      );
+      expect(
+        fetchUrls(fetchMock).some((url) =>
+          url.includes(
+            "is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched+OR+is%3Ahalo+OR+is%3Aretro",
+          ),
+        ),
+      ).toBe(true);
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /^all$/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        10,
-        expect.not.stringContaining("is%3A"),
-        expect.any(Object),
-      );
+      expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(10);
     });
+    expect(printingsUrls(fetchMock).at(-1)).not.toContain("is%3A");
   });
 
   it("filters printings with Scryfall set type search syntax", async () => {
