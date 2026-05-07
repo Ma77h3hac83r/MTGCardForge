@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { ManaSymbols, SetSymbol } from "@/components/CardSymbols";
 import { CardTile } from "@/components/CardDisplay";
+import { ManaLoading } from "@/components/ManaLoading";
+import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -155,7 +157,8 @@ export function SetSearch() {
   return (
     <>
       <AppNav>
-        <form
+        <div className="flex w-full max-w-sm items-center justify-center gap-2">
+          <form
             className="relative w-full max-w-xs"
             onSubmit={(event) => {
               event.preventDefault();
@@ -224,7 +227,9 @@ export function SetSearch() {
             >
               <Search aria-hidden="true" className="h-4 w-4" />
             </Button>
-        </form>
+          </form>
+          <SearchHotkeyHint targetId="set-search" />
+        </div>
       </AppNav>
 
       <section
@@ -266,6 +271,7 @@ function SetStatus({ state, message }: { state: SearchState; message: string }) 
   if (state === "loading") {
     return (
       <div aria-live="polite" className="grid gap-6">
+        <ManaLoading />
         <div className="h-40 animate-pulse rounded-lg border bg-card" />
         <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {Array.from({ length: 10 }).map((_, index) => (
@@ -387,10 +393,13 @@ function SetCards({
       </div>
 
       {isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-          {Array.from({ length: 10 }).map((_, index) => (
-            <div className="aspect-[5/7] animate-pulse rounded-lg border bg-card" key={index} />
-          ))}
+        <div className="space-y-4">
+          <ManaLoading />
+          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            {Array.from({ length: 10 }).map((_, index) => (
+              <div className="aspect-[5/7] animate-pulse rounded-lg border bg-card" key={index} />
+            ))}
+          </div>
         </div>
       ) : filteredCards.length ? (
         <div className="space-y-8">

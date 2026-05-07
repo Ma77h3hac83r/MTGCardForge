@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { SetSymbol } from "@/components/CardSymbols";
 import { CardDetail, CardTile } from "@/components/CardDisplay";
+import { ManaLoading } from "@/components/ManaLoading";
+import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { fetchCardNameSuggestions } from "@/lib/autocomplete";
@@ -138,7 +140,8 @@ export function TokenSearch() {
   return (
     <>
       <AppNav>
-        <form
+        <div className="flex w-full max-w-sm items-center justify-center gap-2">
+          <form
             className="relative w-full max-w-xs"
             onSubmit={(event) => {
               event.preventDefault();
@@ -204,7 +207,9 @@ export function TokenSearch() {
             >
               <Search aria-hidden="true" className="h-4 w-4" />
             </Button>
-        </form>
+          </form>
+          <SearchHotkeyHint targetId="token-search" />
+        </div>
       </AppNav>
 
       <section className="mx-auto w-full max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8">
@@ -248,6 +253,9 @@ function TokenStatus({ state, message }: { state: SearchState; message: string }
   if (state === "loading") {
     return (
       <div aria-live="polite" className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="lg:col-span-2">
+          <ManaLoading />
+        </div>
         <div className="aspect-[5/7] animate-pulse rounded-lg border bg-card" />
         <div className="min-h-96 animate-pulse rounded-lg border bg-card" />
       </div>

@@ -88,6 +88,11 @@ describe("CardSearch", () => {
 
     expect(screen.getByRole("link", { name: /mtg card forge/i })).toBeInTheDocument();
     expect(screen.getByText(/search an exact magic card name/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /press slash to focus this field/i })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "/" });
+
+    expect(screen.getByLabelText(/search by exact card name/i)).toHaveFocus();
   });
 
   it("renders loading placeholders while an exact lookup is pending", () => {
@@ -144,6 +149,7 @@ describe("CardSearch", () => {
         expect.any(Object),
       );
     });
+    expect(await screen.findByText("1 printing")).toBeInTheDocument();
   });
 
   it("looks up an exact card name and renders card details plus printings", async () => {

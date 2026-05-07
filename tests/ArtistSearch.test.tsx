@@ -18,6 +18,28 @@ const artistCard = {
   scryfall_uri: "https://scryfall.com/card/dom/161/gaeas-blessing",
 };
 
+const rareRedArtistCard = {
+  ...artistCard,
+  id: "rare-red-card",
+  name: "Lightning Bolt",
+  collector_number: "150",
+  rarity: "rare",
+  type_line: "Instant",
+  mana_cost: "{R}",
+  colors: ["R"],
+};
+
+const colorlessArtistCard = {
+  ...artistCard,
+  id: "colorless-card",
+  name: "Sol Ring",
+  collector_number: "1",
+  rarity: "uncommon",
+  type_line: "Artifact",
+  mana_cost: "{1}",
+  colors: [],
+};
+
 function response(status: number, payload: unknown) {
   return {
     ok: status >= 200 && status < 300,
@@ -96,6 +118,72 @@ describe("ArtistSearch", () => {
 
     const calledUrl = new URL(String(fetchMock.mock.calls[0][0]));
     expect(calledUrl.searchParams.get("q")).toBe('artist:"Rebecca Guay" game:paper');
+  });
+
+  it("filters artist cards by rarity and exact color identity", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        response(200, {
+          object: "list",
+          has_more: false,
+          data: [artistCard, rareRedArtistCard, colorlessArtistCard],
+        }),
+      ),
+    );
+
+    render(<ArtistSearch />);
+    fireEvent.change(screen.getByLabelText(/search by artist name/i), {
+      target: { value: "Rebecca Guay" },
+    });
+    fireEvent.submit(screen.getByRole("search"));
+
+    expect(await screen.findByText("Gaea's Blessing")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Rare"));
+
+    expect(screen.queryByText("Gaea's Blessing")).not.toBeInTheDocument();
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.queryByText("Sol Ring")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Rare"));
+    fireEvent.click(screen.getByLabelText("Colorless"));
+
+    expect(screen.queryByText("Gaea's Blessing")).not.toBeInTheDocument();
+    expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument();
+    expect(screen.getByText("Sol Ring")).toBeInTheDocument();
+  });
+
+  it("filters artist cards with Scryfall frame search syntax", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, {
+          object: "list",
+          has_more: false,
+          data: [artistCard],
+        }),
+      )
+      .mockResolvedValueOnce(
+        response(200, {
+          object: "list",
+          has_more: false,
+          data: [rareRedArtistCard],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ArtistSearch />);
+    fireEvent.change(screen.getByLabelText(/search by artist name/i), {
+      target: { value: "Rebecca Guay" },
+    });
+    fireEvent.submit(screen.getByRole("search"));
+
+    expect(await screen.findByText("Gaea's Blessing")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Borderless"));
+
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    const filterUrl = new URL(String(fetchMock.mock.calls[1][0]));
+    expect(filterUrl.searchParams.get("q")).toBe('artist:"Rebecca Guay" game:paper is:full');
   });
 
   it("loads artist links from the artist query parameter", async () => {

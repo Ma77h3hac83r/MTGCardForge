@@ -211,7 +211,9 @@ export function getDeckGroup(card: CardSearchResult | null): DeckGroupKey {
 
 function parseDeckLine(line: string) {
   const normalizedLine = line
+    .replace(/^\s*(?:\/\/+|#+)\s*/, "")
     .replace(/^SB:\s*/i, "")
+    .replace(/^(?:about|commander|companion|deck|mainboard|sideboard|maybeboard):\s*/i, "")
     .replace(/\s+#.*$/, "")
     .trim();
 
@@ -228,7 +230,7 @@ function parseDeckLine(line: string) {
   const quantity = Number.parseInt(match[1], 10);
   const name = cleanCardName(match[2]);
 
-  if (!quantity || !name) {
+  if (!quantity || !name || isDeckHeading(name)) {
     return null;
   }
 
@@ -247,8 +249,13 @@ function cleanCardName(name: string) {
 }
 
 function isDeckHeading(line: string) {
-  return /^(commander|companion|deck|mainboard|sideboard|maybeboard|planeswalker|creature|artifact|enchantment|instant|sorcery|land|lands|basic land|basic lands|other)$/i.test(
-    line,
+  const normalizedLine = line
+    .replace(/^\s*(?:\/\/+|#+)\s*/, "")
+    .replace(/:+$/g, "")
+    .trim();
+
+  return /^(about|commander|companion|deck|mainboard|sideboard|maybeboard|planeswalker|planeswalkers|creature|creatures|artifact|artifacts|enchantment|enchantments|instant|instants|sorcery|sorceries|land|lands|basic land|basic lands|other)$/i.test(
+    normalizedLine,
   );
 }
 
@@ -281,6 +288,11 @@ function isDeckUrl(input: string) {
 
 async function fetchDeckUrlCards(input: string, signal?: AbortSignal) {
   const url = new URL(input);
+  const proxiedCards = await fetchProxiedDeckCards(url, signal);
+
+  if (proxiedCards) {
+    return proxiedCards;
+  }
 
   if (/(^|\.)moxfield\.com$/i.test(url.hostname)) {
     return fetchMoxfieldCards(url, signal);
@@ -293,14 +305,8 @@ async function fetchDeckUrlCards(input: string, signal?: AbortSignal) {
   return [];
 }
 
-async function fetchMoxfieldCards(url: URL, signal?: AbortSignal) {
-  const deckId = url.pathname.match(/\/decks\/([^/?#]+)/i)?.[1];
-
-  if (!deckId || !/^[A-Za-z0-9_-]+$/.test(deckId)) {
-    return [];
-  }
-
-  const response = await fetch(`https://api.moxfield.com/v2/decks/all/${encodeURIComponent(deckId)}`, {
+async function fetchProxiedDeckCards(url: URL, signal?: AbortSignal) {
+  const response = await fetch(`/api/deck-import?url=${encodeURIComponent(url.toString())}`, {
     signal,
     headers: {
       Accept: "application/json",
@@ -308,20 +314,72 @@ async function fetchMoxfieldCards(url: URL, signal?: AbortSignal) {
   });
 
   if (!response.ok) {
-    throw new Error("Unable to load this Moxfield deck.");
+    return null;
   }
 
   const payload = (await response.json()) as {
-    mainboard?: Record<string, MoxfieldDeckEntry>;
-    commanders?: Record<string, MoxfieldDeckEntry>;
-    companions?: Record<string, MoxfieldDeckEntry>;
+    cards?: DeckInputCard[];
   };
 
+  if (!Array.isArray(payload.cards)) {
+    return null;
+  }
+
+  const cards = payload.cards
+    .map((card) => ({
+      name: card.name,
+      quantity: card.quantity,
+    }))
+    .filter((card): card is DeckInputCard => Boolean(card.name && card.quantity > 0));
+
+  if (payload.cards.length && !cards.length) {
+    return null;
+  }
+
+  return mergeCardQuantities(cards);
+}
+
+async function fetchMoxfieldCards(url: URL, signal?: AbortSignal) {
+  const deckId = url.pathname.match(/\/decks\/([^/?#]+)/i)?.[1];
+
+  if (!deckId || !/^[A-Za-z0-9_-]+$/.test(deckId)) {
+    return [];
+  }
+
+  const response = await fetchMoxfieldDeckPayload(deckId, signal);
+
+  if (!response.ok) {
+    throw new Error("Unable to load this Moxfield deck.");
+  }
+
+  const payload = (await response.json()) as MoxfieldDeckPayload;
+
   return mergeCardQuantities([
-    ...getMoxfieldBoardCards(payload.commanders),
-    ...getMoxfieldBoardCards(payload.mainboard),
-    ...getMoxfieldBoardCards(payload.companions),
+    ...getMoxfieldDeckCards(payload),
   ]);
+}
+
+async function fetchMoxfieldDeckPayload(deckId: string, signal?: AbortSignal) {
+  const urls = [
+    `https://api2.moxfield.com/v3/decks/all/${encodeURIComponent(deckId)}`,
+    `https://api2.moxfield.com/v2/decks/all/${encodeURIComponent(deckId)}`,
+    `https://api.moxfield.com/v2/decks/all/${encodeURIComponent(deckId)}`,
+  ];
+
+  for (const url of urls) {
+    const response = await fetch(url, {
+      signal,
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (response.ok) {
+      return response;
+    }
+  }
+
+  return new Response(null, { status: 502 });
 }
 
 async function fetchArchidektCards(url: URL, signal?: AbortSignal) {
@@ -342,12 +400,11 @@ async function fetchArchidektCards(url: URL, signal?: AbortSignal) {
     throw new Error("Unable to load this Archidekt deck.");
   }
 
-  const payload = (await response.json()) as {
-    cards?: ArchidektDeckEntry[];
-  };
+  const payload = (await response.json()) as ArchidektDeckPayload;
 
   return mergeCardQuantities(
     (payload.cards ?? [])
+      .filter((entry) => isIncludedArchidektEntry(entry, payload.categories))
       .map((entry) => ({
         name: getArchidektCardName(entry),
         quantity: entry.quantity ?? 1,
@@ -356,34 +413,92 @@ async function fetchArchidektCards(url: URL, signal?: AbortSignal) {
   );
 }
 
-type MoxfieldDeckEntry = {
-  quantity?: number;
-  card?: {
-    name?: string;
+type MoxfieldDeckPayload = {
+  mainboard?: Record<string, MoxfieldDeckEntry>;
+  commanders?: Record<string, MoxfieldDeckEntry>;
+  companions?: Record<string, MoxfieldDeckEntry>;
+  sideboard?: Record<string, MoxfieldDeckEntry>;
+  boards?: {
+    mainboard?: { cards?: Record<string, MoxfieldDeckEntry> };
+    commanders?: { cards?: Record<string, MoxfieldDeckEntry> };
+    companions?: { cards?: Record<string, MoxfieldDeckEntry> };
+    sideboard?: { cards?: Record<string, MoxfieldDeckEntry> };
   };
 };
 
+type MoxfieldDeckEntry = {
+  quantity?: number;
+  qty?: number;
+  card?: {
+    name?: string;
+    cardName?: string;
+  };
+};
+
+function getMoxfieldDeckCards(payload: MoxfieldDeckPayload) {
+  const legacyCards = [
+    ...getMoxfieldBoardCards(payload.commanders),
+    ...getMoxfieldBoardCards(payload.mainboard),
+    ...getMoxfieldBoardCards(payload.companions),
+    ...getMoxfieldBoardCards(payload.sideboard),
+  ];
+
+  if (legacyCards.length) {
+    return legacyCards;
+  }
+
+  return [
+    ...getMoxfieldBoardCards(payload.boards?.commanders?.cards),
+    ...getMoxfieldBoardCards(payload.boards?.mainboard?.cards),
+    ...getMoxfieldBoardCards(payload.boards?.companions?.cards),
+    ...getMoxfieldBoardCards(payload.boards?.sideboard?.cards),
+  ];
+}
+
 function getMoxfieldBoardCards(board: Record<string, MoxfieldDeckEntry> | undefined) {
-  return Object.values(board ?? {})
-    .map((entry) => ({
-      name: entry.card?.name ?? "",
-      quantity: entry.quantity ?? 1,
+  return Object.entries(board ?? {})
+    .map(([fallbackName, entry]) => ({
+      name: entry.card?.name ?? entry.card?.cardName ?? fallbackName,
+      quantity: entry.quantity ?? entry.qty ?? 1,
     }))
     .filter((card): card is DeckInputCard => Boolean(card.name));
 }
 
+type ArchidektDeckPayload = {
+  categories?: Array<{
+    name: string;
+    includedInDeck?: boolean;
+  }>;
+  cards?: ArchidektDeckEntry[];
+};
+
 type ArchidektDeckEntry = {
+  categories?: string[];
   quantity?: number;
+  qty?: number;
   card?: {
     oracleCard?: {
       name?: string;
     };
+    oracle_card?: {
+      name?: string;
+    };
+    displayName?: string;
     name?: string;
   };
 };
 
+function isIncludedArchidektEntry(entry: ArchidektDeckEntry, categories: ArchidektDeckPayload["categories"]) {
+  if (!entry.categories?.length || !categories?.length) {
+    return true;
+  }
+
+  const includedCategories = new Map(categories.map((category) => [category.name, category.includedInDeck !== false]));
+  return entry.categories.some((category) => includedCategories.get(category) !== false);
+}
+
 function getArchidektCardName(entry: ArchidektDeckEntry) {
-  return entry.card?.oracleCard?.name ?? entry.card?.name ?? "";
+  return entry.card?.oracleCard?.name ?? entry.card?.oracle_card?.name ?? entry.card?.displayName ?? entry.card?.name ?? "";
 }
 
 async function fetchExactFallback(cardName: string, signal?: AbortSignal) {

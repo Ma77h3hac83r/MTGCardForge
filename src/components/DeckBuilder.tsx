@@ -2,6 +2,8 @@ import { ClipboardList } from "lucide-react";
 import { useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { CardTile } from "@/components/CardDisplay";
+import { ManaLoading } from "@/components/ManaLoading";
+import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DECK_GROUPS, groupDeckCards, parseDeckInput, resolveDeckCards, type DeckResolvedCard } from "@/lib/deckSearch";
@@ -80,9 +82,12 @@ export function DeckBuilder() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-2">
-              <label className="text-sm font-medium" htmlFor="deck-input">
-                Deck input
-              </label>
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-sm font-medium" htmlFor="deck-input">
+                  Deck input
+                </label>
+                <SearchHotkeyHint label="deck input" targetId="deck-input" />
+              </div>
               <textarea
                 className="min-h-56 w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={state === "loading"}
@@ -115,6 +120,7 @@ function DeckStatus({ state, message }: { state: DeckState; message: string }) {
   if (state === "loading") {
     return (
       <div aria-live="polite" className="grid gap-6">
+        <ManaLoading />
         <div className="h-20 animate-pulse rounded-lg border bg-card" />
         <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {Array.from({ length: 10 }).map((_, index) => (

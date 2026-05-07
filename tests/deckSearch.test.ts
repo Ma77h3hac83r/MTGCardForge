@@ -57,6 +57,31 @@ SB: 1 Lightning Bolt # note
     ]);
   });
 
+  it("ignores deck export headings and metadata mixed into pasted lists", () => {
+    expect(
+      parseDeckList(`
+Deck
+About
+Commander
+1 Commander
+100 Deck
+Mainboard
+1 Mainboard
+// Sideboard
+Sideboard: 1 Lightning Bolt
+Maybeboard: 2 Counterspell
+Companion:
+1 Sol Ring
+1 About Face
+`),
+    ).toEqual([
+      { name: "Lightning Bolt", quantity: 1 },
+      { name: "Counterspell", quantity: 2 },
+      { name: "Sol Ring", quantity: 1 },
+      { name: "About Face", quantity: 1 },
+    ]);
+  });
+
   it("builds cheapest paper printing URLs ordered by USD", () => {
     const url = new URL(buildCheapestPrintingUrl("Sol Ring"));
 
@@ -255,14 +280,69 @@ SB: 1 Lightning Bolt # note
     ]);
   });
 
+  it("parses proxied deck URL cards before calling source APIs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      response(200, {
+        cards: [
+          { quantity: 1, name: "Atraxa, Praetors' Voice" },
+          { quantity: 1, name: "Sol Ring" },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(parseDeckInput("https://moxfield.com/decks/OGeRvDB6W02Th2YIrystKw")).resolves.toEqual([
+      { name: "Atraxa, Praetors' Voice", quantity: 1 },
+      { name: "Sol Ring", quantity: 1 },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/deck-import?url=");
+  });
+
+  it("parses current Moxfield board payloads when the proxy is unavailable", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(404, {}))
+      .mockResolvedValueOnce(
+        response(200, {
+          boards: {
+            commanders: {
+              cards: {
+                commander: { quantity: 1, card: { name: "Jin Sakai, Ghost of Tsushima" } },
+              },
+            },
+            mainboard: {
+              cards: {
+                ring: { quantity: 1, card: { name: "Sol Ring" } },
+              },
+            },
+          },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(parseDeckInput("https://moxfield.com/decks/OGeRvDB6W02Th2YIrystKw")).resolves.toEqual([
+      { name: "Jin Sakai, Ghost of Tsushima", quantity: 1 },
+      { name: "Sol Ring", quantity: 1 },
+    ]);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      "https://api2.moxfield.com/v3/decks/all/OGeRvDB6W02Th2YIrystKw",
+    );
+  });
+
   it("parses Archidekt deck URLs", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
         response(200, {
+          categories: [
+            { name: "Mainboard", includedInDeck: true },
+            { name: "Maybeboard", includedInDeck: false },
+          ],
           cards: [
-            { quantity: 2, card: { oracleCard: { name: "Counterspell" } } },
-            { quantity: 1, card: { name: "Sol Ring" } },
+            { categories: ["Mainboard"], quantity: 2, card: { oracleCard: { name: "Counterspell" } } },
+            { categories: ["Mainboard"], quantity: 1, card: { name: "Sol Ring" } },
+            { categories: ["Maybeboard"], quantity: 1, card: { oracleCard: { name: "Force of Will" } } },
           ],
         }),
       ),

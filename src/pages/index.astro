@@ -1,51 +1,37 @@
 ---
+import HomeRandomPrintings from "@/components/HomeRandomPrintings";
 import SiteLayout from "@/layouts/SiteLayout.astro";
 
 const tools = [
   {
     href: "/printings",
     label: "Printings",
-    details: [
-      "Exact-name card lookup with autocomplete suggestions.",
-      "Card detail panel with image, oracle text, legality summary, set data, artist, and TCGplayer price button.",
-      "Paper printing gallery with filters for Standard, Borderless, Extended, Showcase, Etched, Halo Foil, and Retro.",
-    ],
+    symbol: "ms-u",
+    stat: "Exact names",
   },
   {
     href: "/sets",
     label: "Sets",
-    details: [
-      "Search by set code and include related base, commander, supplemental, promo, token, and other subsets.",
-      "Set overview stats are shown above the card list.",
-      "Section labels, table-of-contents jumps, frame filters, token filters, and price rows help compare the full release.",
-    ],
+    symbol: "ms-g",
+    stat: "Full releases",
   },
   {
     href: "/tokens",
     label: "Tokens",
-    details: [
-      "Search token names directly, including variants like different sizes, colors, abilities, and power/toughness.",
-      "Search source cards that create tokens and see the generated token details beside the card details.",
-      "Token printings and producer cards are grouped so alternate versions are easier to trace.",
-    ],
+    symbol: "ms-r",
+    stat: "Produced pieces",
   },
   {
     href: "/artists",
     label: "Artists",
-    details: [
-      "Autocomplete searches artist names instead of card names.",
-      "Artist names from card detail pages can link straight into this gallery.",
-      "Cards are sorted most recent first and use the shared tile layout with set code, collector number, set icon, and prices.",
-    ],
+    symbol: "ms-w",
+    stat: "Galleries",
   },
   {
     href: "/deck",
     label: "Deck",
-    details: [
-      "Accepts pasted deck lists plus Moxfield and Archidekt deck URLs.",
-      "Parses common export formats with set codes, collector numbers, foil markers, and special named versions.",
-      "Groups cards into Planeswalker, Creature, Artifact, Enchantment, Instant, Sorcery, Other, Lands, and Basic Land sections.",
-    ],
+    symbol: "ms-b",
+    stat: "Pasted lists",
   },
 ];
 ---
@@ -54,34 +40,65 @@ const tools = [
   title="MTG Card Forge"
   description="Search Magic cards, compare printings, explore sets, tokens, artists, and deck lists."
 >
-  <section class="mx-auto w-full max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8">
-    <div class="rounded-lg border bg-card p-8 shadow-sm">
-      <h1 class="mt-2 max-w-6xl text-3xl font-semibold tracking-normal sm:text-4xl">
-        Practical tools for Magic card printings, sets, tokens, artists, and decks.
-      </h1>
-    </div>
+  <section class="mx-auto w-full max-w-7xl space-y-12 px-4 py-8 sm:px-6 lg:px-8">
+    <section class="overflow-hidden rounded-lg border bg-card shadow-sm">
+      <div class="grid gap-8 p-6 sm:p-8 lg:grid-cols-[minmax(0,1fr)_minmax(260px,360px)] lg:items-center">
+        <div class="max-w-3xl space-y-6">
+          <div class="flex flex-wrap items-center gap-2 text-2xl" aria-label="Magic mana colors">
+            <span class="ms ms-cost ms-w shadow-sm" role="img" aria-label="White mana"></span>
+            <span class="ms ms-cost ms-u shadow-sm" role="img" aria-label="Blue mana"></span>
+            <span class="ms ms-cost ms-b shadow-sm" role="img" aria-label="Black mana"></span>
+            <span class="ms ms-cost ms-r shadow-sm" role="img" aria-label="Red mana"></span>
+            <span class="ms ms-cost ms-g shadow-sm" role="img" aria-label="Green mana"></span>
+            <span class="ms ms-cost ms-c shadow-sm" role="img" aria-label="Colorless mana"></span>
+          </div>
 
-    <section class="space-y-4">
-      <div class="grid gap-4">
+          <div>
+            <h1 class="max-w-4xl text-4xl font-semibold tracking-normal sm:text-5xl">
+              MTG Card Forge
+            </h1>
+            <p class="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
+              A focused Magic research bench for comparing paper printings, browsing complete releases, tracing tokens, checking artists, and turning deck lists into useful card sections.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap gap-3">
+            <a
+              class="inline-flex h-10 items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              href="/printings"
+            >
+              Search Printings
+            </a>
+            <a
+              class="inline-flex h-10 items-center justify-center rounded-md border bg-background px-4 text-sm font-medium transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              href="/deck"
+            >
+              Paste a Deck
+            </a>
+          </div>
+        </div>
+
+        <HomeRandomPrintings client:load />
+      </div>
+    </section>
+
+    <section>
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {
           tools.map((tool) => (
             <a
               class="group block overflow-hidden rounded-lg border bg-card shadow-sm transition-colors hover:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               href={tool.href}
             >
-              <div class="p-5 sm:p-6">
-                <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                    <h3 class="text-xl font-semibold tracking-normal">{tool.label}</h3>
-                  </div>
+              <div class="flex min-h-32 flex-col justify-between p-5">
+                <div>
+                  <span class={`ms ms-cost ${tool.symbol} text-xl shadow-sm`} aria-hidden="true"></span>
+                  <h3 class="mt-4 text-xl font-semibold tracking-normal">{tool.label}</h3>
+                  <p class="mt-2 text-sm font-medium text-muted-foreground">{tool.stat}</p>
                 </div>
-                <div class="mt-8 grid gap-3 md:grid-cols-3">
-                  {tool.details.map((detail) => (
-                    <p class="rounded-md border bg-background/50 p-3 text-sm leading-6 text-muted-foreground">
-                      {detail}
-                    </p>
-                  ))}
-                </div>
+                <span class="mt-5 text-2xl text-muted-foreground transition-transform group-hover:translate-x-1" aria-hidden="true">
+                  &rarr;
+                </span>
               </div>
             </a>
           ))

@@ -25,6 +25,12 @@ describe("artistSearch", () => {
     expect(url.searchParams.get("include_extras")).toBe("true");
   });
 
+  it("adds frame filter syntax to artist search URLs", () => {
+    const url = new URL(buildArtistSearchUrl("Rebecca Guay", ["full", "extended"]));
+
+    expect(url.searchParams.get("q")).toBe('artist:"Rebecca Guay" game:paper (is:full OR is:extended)');
+  });
+
   it("fetches and normalizes artist cards", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       response(200, {

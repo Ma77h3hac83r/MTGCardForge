@@ -20,6 +20,11 @@ describe("DeckBuilder", () => {
 
     expect(screen.queryByRole("search")).not.toBeInTheDocument();
     expect(screen.getByLabelText(/deck input/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /press slash to focus this field/i })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "/" });
+
+    expect(screen.getByLabelText(/deck input/i)).toHaveFocus();
   });
 
   it("loads a pasted deck list and groups cards by type", async () => {
