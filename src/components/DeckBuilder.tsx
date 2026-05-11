@@ -63,49 +63,68 @@ export function DeckBuilder() {
     }
   }
 
+  function resetDeck() {
+    setInput("");
+    setState("idle");
+    setCards([]);
+    setTokens([]);
+    setMessage("");
+  }
+
   return (
     <>
       <AppNav layout="split" />
 
       <section className="mx-auto w-full max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8" id="deck-page-top">
         <Card>
-          <CardHeader>
-            <div className="flex items-start gap-3">
-              <ClipboardList aria-hidden="true" className="mt-1 h-5 w-5 text-muted-foreground" />
-              <div>
-                <CardTitle className="text-2xl">Deck</CardTitle>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Paste a card list, Moxfield deck URL, or Archidekt deck URL.
-                </p>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-2">
-              <div className="flex items-center justify-between gap-3">
-                <label className="text-sm font-medium" htmlFor="deck-input">
-                  Deck input
-                </label>
-                <SearchHotkeyHint label="deck input" targetId="deck-input" />
-              </div>
-              <textarea
-                className="min-h-56 w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={state === "loading"}
-                id="deck-input"
-                placeholder={"1 Sol Ring\n1 Command Tower\n1 Counterspell"}
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <Button disabled={state === "loading"} onClick={() => void loadDeck()} type="button">
-                {state === "loading" ? "Loading" : "Load Deck"}
+          {state === "results" ? (
+            <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <p className="text-sm font-medium text-muted-foreground">Deck loaded</p>
+              <Button onClick={resetDeck} type="button">
+                Load new deck
               </Button>
-              <p className="text-sm text-muted-foreground">
-                Cards resolve to the cheapest paper printing with a Scryfall USD price when available.
-              </p>
-            </div>
-          </CardContent>
+            </CardContent>
+          ) : (
+            <>
+              <CardHeader>
+                <div className="flex items-start gap-3">
+                  <ClipboardList aria-hidden="true" className="mt-1 h-5 w-5 text-muted-foreground" />
+                  <div>
+                    <CardTitle className="text-2xl">Deck</CardTitle>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Paste a card list, Moxfield deck URL, or Archidekt deck URL.
+                    </p>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-sm font-medium" htmlFor="deck-input">
+                      Deck input
+                    </label>
+                    <SearchHotkeyHint label="deck input" targetId="deck-input" />
+                  </div>
+                  <textarea
+                    className="min-h-56 w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={state === "loading"}
+                    id="deck-input"
+                    placeholder={"1 Sol Ring\n1 Command Tower\n1 Counterspell"}
+                    value={input}
+                    onChange={(event) => setInput(event.target.value)}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button disabled={state === "loading"} onClick={() => void loadDeck()} type="button">
+                    {state === "loading" ? "Loading" : "Load Deck"}
+                  </Button>
+                  <p className="text-sm text-muted-foreground">
+                    Cards resolve to the cheapest paper printing with a Scryfall USD price when available.
+                  </p>
+                </div>
+              </CardContent>
+            </>
+          )}
         </Card>
 
         <DeckStatus message={message} state={state} />
@@ -144,50 +163,34 @@ function DeckStatus({ state, message }: { state: DeckState; message: string }) {
 
 function DeckResults({ cards, tokens }: { cards: DeckResolvedCard[]; tokens: CardSearchResult[] }) {
   const groups = groupDeckCards(cards);
-  const cardCount = cards.reduce((total, card) => total + card.quantity, 0);
-  const unresolvedCount = cards.filter((card) => !card.card).length;
   const tokenDeckCards = tokens.map((token) => ({
     name: token.name,
     quantity: 1,
     card: token,
   }));
+  const typeBreakdown = getTypeBreakdown(groups, tokenDeckCards);
 
   return (
     <section className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl">Deck Summary</CardTitle>
+          <CardTitle className="text-xl">Card type breakdown</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-3 text-sm sm:grid-cols-4">
-            <Stat label="Cards" value={cardCount.toString()} />
-            <Stat label="Unique cards" value={cards.length.toString()} />
-            <Stat label="Tokens" value={tokens.length.toString()} />
-            <Stat label="Unresolved" value={unresolvedCount.toString()} />
+          <div className="grid grid-rows-2 gap-2 text-sm sm:grid-flow-col sm:auto-cols-fr">
+            {typeBreakdown.map((item) => (
+              <a
+                className="flex items-center justify-between rounded-md border bg-background/50 px-3 py-2 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                href={item.href}
+                key={item.key}
+              >
+                <span className="text-muted-foreground">{item.label}</span>
+                <span className="font-semibold">{item.quantity}</span>
+              </a>
+            ))}
           </div>
         </CardContent>
       </Card>
-
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-muted-foreground">Jump:</span>
-        {groups.map((group) => (
-          <a
-            className="rounded-sm border bg-card px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            href={`#deck-section-${group.key}`}
-            key={group.key}
-          >
-            {group.label}
-          </a>
-        ))}
-        {tokens.length > 0 && (
-          <a
-            className="rounded-sm border bg-card px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            href="#deck-section-tokens"
-          >
-            Tokens
-          </a>
-        )}
-      </div>
 
       <div className="space-y-8">
         {DECK_GROUPS.map((group) => {
@@ -205,6 +208,32 @@ function DeckResults({ cards, tokens }: { cards: DeckResolvedCard[]; tokens: Car
       </div>
     </section>
   );
+}
+
+function getTypeBreakdown(
+  groups: ReturnType<typeof groupDeckCards>,
+  tokenDeckCards: DeckResolvedCard[],
+) {
+  const deckTypes = groups.map((group) => ({
+    href: `#deck-section-${group.key}`,
+    key: group.key,
+    label: group.label,
+    quantity: group.cards.reduce((total, card) => total + card.quantity, 0),
+  }));
+
+  if (!tokenDeckCards.length) {
+    return deckTypes;
+  }
+
+  return [
+    ...deckTypes,
+    {
+      href: "#deck-section-tokens",
+      key: "tokens",
+      label: "Tokens",
+      quantity: tokenDeckCards.reduce((total, card) => total + card.quantity, 0),
+    },
+  ];
 }
 
 function DeckSection({
@@ -259,14 +288,5 @@ function DeckCardTile({ deckCard }: { deckCard: DeckResolvedCard }) {
     );
   }
 
-  return <CardTile card={card} quantity={deckCard.quantity} showManaCost showName showType />;
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border bg-background/50 p-3">
-      <dt className="text-xs font-medium uppercase tracking-normal text-muted-foreground">{label}</dt>
-      <dd className="mt-1 text-sm font-semibold">{value}</dd>
-    </div>
-  );
+  return <CardTile card={card} quantity={deckCard.quantity} showName showPrintingMeta={false} showType />;
 }

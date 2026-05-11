@@ -68,8 +68,7 @@ describe("TokenSearch", () => {
     fireEvent.submit(screen.getByRole("search"));
 
     expect(await screen.findByText("Token Details")).toBeInTheDocument();
-    expect(screen.getByText("White")).toBeInTheDocument();
-    expect(screen.getByText("Colors")).toBeInTheDocument();
+    expect(screen.queryByText("Colors")).not.toBeInTheDocument();
     expect(screen.queryByText("Token Versions")).not.toBeInTheDocument();
     expect(screen.queryByText("Tokens Created")).not.toBeInTheDocument();
     expect(screen.queryByText("Other Printings")).not.toBeInTheDocument();

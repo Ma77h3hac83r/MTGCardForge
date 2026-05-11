@@ -1,42 +1,29 @@
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
-import { ManaSymbols } from "@/components/CardSymbols";
+import { AdvancedCardFilterSections, CheckboxFilterGroup, FilteredResultsLayout } from "@/components/CardFilters";
 import { CardTile } from "@/components/CardDisplay";
 import { ManaLoading } from "@/components/ManaLoading";
 import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { fetchArtistNameSuggestions } from "@/lib/autocomplete";
 import {
+  filterCardsByAdvancedFilters,
+  toggleFilterValue,
+  type ColorFilter,
+  type PriceFilter,
+  type RarityFilter,
+} from "@/lib/cardFilters";
+import {
   ARTIST_FRAME_FILTERS,
   fetchArtistCards,
-  getArtistStats,
   type ArtistFrameFilter,
 } from "@/lib/artistSearch";
 import type { CardSearchResult } from "@/lib/scryfall";
 
 type SearchState = "idle" | "loading" | "results" | "empty" | "error";
-type RarityFilter = "common" | "uncommon" | "rare" | "mythic" | "special";
-type ColorFilter = "W" | "U" | "B" | "R" | "G" | "colorless";
-
-const RARITY_FILTERS: Array<{ label: string; value: RarityFilter }> = [
-  { label: "Common", value: "common" },
-  { label: "Uncommon", value: "uncommon" },
-  { label: "Rare", value: "rare" },
-  { label: "Mythic", value: "mythic" },
-  { label: "Special", value: "special" },
-];
-
-const COLOR_FILTERS: Array<{ label: string; value: ColorFilter; symbol: string }> = [
-  { label: "White", value: "W", symbol: "{W}" },
-  { label: "Blue", value: "U", symbol: "{U}" },
-  { label: "Black", value: "B", symbol: "{B}" },
-  { label: "Red", value: "R", symbol: "{R}" },
-  { label: "Green", value: "G", symbol: "{G}" },
-  { label: "Colorless", value: "colorless", symbol: "{C}" },
-];
 
 export function ArtistSearch() {
   const [query, setQuery] = useState("");
@@ -46,6 +33,7 @@ export function ArtistSearch() {
   const [activeFrameFilters, setActiveFrameFilters] = useState<ArtistFrameFilter[]>(["all"]);
   const [activeRarities, setActiveRarities] = useState<RarityFilter[]>([]);
   const [activeColors, setActiveColors] = useState<ColorFilter[]>([]);
+  const [activePrices, setActivePrices] = useState<PriceFilter[]>([]);
   const [cardsLoading, setCardsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
@@ -102,6 +90,7 @@ export function ArtistSearch() {
       setActiveFrameFilters(["all"]);
       setActiveRarities([]);
       setActiveColors([]);
+      setActivePrices([]);
       setCardsLoading(false);
       setSuggestions([]);
       setSuggestionsOpen(false);
@@ -116,6 +105,7 @@ export function ArtistSearch() {
     setActiveFrameFilters(["all"]);
     setActiveRarities([]);
     setActiveColors([]);
+    setActivePrices([]);
     setCardsLoading(false);
     setSuggestions([]);
     setSuggestionsOpen(false);
@@ -172,19 +162,15 @@ export function ArtistSearch() {
   }
 
   function toggleRarity(nextRarity: RarityFilter) {
-    setActiveRarities((currentRarities) =>
-      currentRarities.includes(nextRarity)
-        ? currentRarities.filter((rarity) => rarity !== nextRarity)
-        : [...currentRarities, nextRarity],
-    );
+    setActiveRarities((currentRarities) => toggleFilterValue(currentRarities, nextRarity));
   }
 
   function toggleColor(nextColor: ColorFilter) {
-    setActiveColors((currentColors) =>
-      currentColors.includes(nextColor)
-        ? currentColors.filter((color) => color !== nextColor)
-        : [...currentColors, nextColor],
-    );
+    setActiveColors((currentColors) => toggleFilterValue(currentColors, nextColor));
+  }
+
+  function togglePrice(nextPrice: PriceFilter) {
+    setActivePrices((currentPrices) => toggleFilterValue(currentPrices, nextPrice));
   }
 
   return (
@@ -267,15 +253,17 @@ export function ArtistSearch() {
 
         {state === "results" && (
           <>
-            <ArtistStats artistName={artistName} cards={cards} />
+            <ArtistStats artistName={artistName} cardCount={cards.length} />
             <ArtistCards
               activeColors={activeColors}
               activeFrameFilters={activeFrameFilters}
+              activePrices={activePrices}
               activeRarities={activeRarities}
               cards={cards}
               isLoading={cardsLoading}
               onColorToggle={toggleColor}
               onFrameToggle={toggleFrameFilter}
+              onPriceToggle={togglePrice}
               onRarityToggle={toggleRarity}
             />
           </>
@@ -319,22 +307,14 @@ function ArtistStatus({ state, message }: { state: SearchState; message: string 
   return null;
 }
 
-function ArtistStats({ artistName, cards }: { artistName: string; cards: CardSearchResult[] }) {
-  const stats = getArtistStats(cards);
-
+function ArtistStats({ artistName, cardCount }: { artistName: string; cardCount: number }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-2xl">{artistName}</CardTitle>
-        <p className="mt-1 text-sm text-muted-foreground">Artist gallery</p>
+        <CardTitle aria-label={artistName} className="text-2xl">
+          {artistName} <span className="text-base font-medium text-muted-foreground">({cardCount} cards)</span>
+        </CardTitle>
       </CardHeader>
-      <CardContent>
-        <div className="grid gap-3 text-sm sm:grid-cols-3">
-          <Stat label="Artwork shown" value={stats.cardCount.toString()} />
-          <Stat label="Sets" value={stats.setCount.toString()} />
-          <Stat label="Colors" value={stats.colorCount.toString()} />
-        </div>
-      </CardContent>
     </Card>
   );
 }
@@ -342,139 +322,80 @@ function ArtistStats({ artistName, cards }: { artistName: string; cards: CardSea
 function ArtistCards({
   activeColors,
   activeFrameFilters,
+  activePrices,
   activeRarities,
   cards,
   isLoading,
   onColorToggle,
   onFrameToggle,
+  onPriceToggle,
   onRarityToggle,
 }: {
   activeColors: ColorFilter[];
   activeFrameFilters: ArtistFrameFilter[];
+  activePrices: PriceFilter[];
   activeRarities: RarityFilter[];
   cards: CardSearchResult[];
   isLoading: boolean;
   onColorToggle: (color: ColorFilter) => void;
   onFrameToggle: (filter: ArtistFrameFilter) => void;
+  onPriceToggle: (price: PriceFilter) => void;
   onRarityToggle: (rarity: RarityFilter) => void;
 }) {
-  const filteredCards = filterCards(cards, activeRarities, activeColors);
+  const filteredCards = filterCardsByAdvancedFilters(cards, {
+    colors: activeColors,
+    prices: activePrices,
+    rarities: activeRarities,
+  });
+  const filterPanel = (
+    <>
+      <CheckboxFilterGroup
+        disabled={isLoading}
+        label="Frame"
+        onToggle={onFrameToggle}
+        options={ARTIST_FRAME_FILTERS}
+        selectedValues={activeFrameFilters}
+      />
+      <AdvancedCardFilterSections
+        activeFilters={{
+          colors: activeColors,
+          prices: activePrices,
+          rarities: activeRarities,
+        }}
+        disabled={isLoading}
+        onColorToggle={onColorToggle}
+        onPriceToggle={onPriceToggle}
+        onRarityToggle={onRarityToggle}
+      />
+    </>
+  );
 
   return (
     <section className="space-y-4">
-      <div className="space-y-4">
-        <div>
-          <h2 className="text-xl font-semibold tracking-normal">Cards</h2>
-          <p className="text-sm text-muted-foreground">
-            {isLoading ? "Loading cards" : `${filteredCards.length} ${filteredCards.length === 1 ? "card" : "cards"}`}
-          </p>
-        </div>
-        <div className="space-y-3">
-          <CheckboxFilterGroup
-            disabled={isLoading}
-            label="Frame"
-            onToggle={onFrameToggle}
-            options={ARTIST_FRAME_FILTERS}
-            selectedValues={activeFrameFilters}
-          />
-          <CheckboxFilterGroup
-            disabled={isLoading}
-            label="Rarity"
-            onToggle={onRarityToggle}
-            options={RARITY_FILTERS}
-            selectedValues={activeRarities}
-          />
-          <CheckboxFilterGroup
-            disabled={isLoading}
-            label="Color"
-            onToggle={onColorToggle}
-            options={COLOR_FILTERS}
-            selectedValues={activeColors}
-            showManaSymbols
-          />
-        </div>
-      </div>
-      {isLoading ? (
-        <div className="space-y-4">
-          <ManaLoading />
+      <FilteredResultsLayout filters={filterPanel}>
+        {isLoading ? (
+          <div className="space-y-4">
+            <ManaLoading />
+            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              {Array.from({ length: 10 }).map((_, index) => (
+                <div className="aspect-[5/7] animate-pulse rounded-lg border bg-card" key={index} />
+              ))}
+            </div>
+          </div>
+        ) : filteredCards.length ? (
           <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {Array.from({ length: 10 }).map((_, index) => (
-              <div className="aspect-[5/7] animate-pulse rounded-lg border bg-card" key={index} />
+            {filteredCards.map((card) => (
+              <CardTile card={card} key={card.id} showManaCost showName showType />
             ))}
           </div>
-        </div>
-      ) : filteredCards.length ? (
-        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-          {filteredCards.map((card) => (
-            <CardTile card={card} key={card.id} showManaCost showName showType />
-          ))}
-        </div>
-      ) : (
-        <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground">
-          No cards matched this filter.
-        </div>
-      )}
+        ) : (
+          <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground">
+            No cards matched this filter.
+          </div>
+        )}
+      </FilteredResultsLayout>
     </section>
   );
-}
-
-function CheckboxFilterGroup<T extends string>({
-  disabled,
-  label,
-  onToggle,
-  options,
-  selectedValues,
-  showManaSymbols = false,
-}: {
-  disabled: boolean;
-  label: string;
-  onToggle: (value: T) => void;
-  options: Array<{ label: string; value: T; symbol?: string }>;
-  selectedValues: T[];
-  showManaSymbols?: boolean;
-}) {
-  return (
-    <fieldset className="space-y-2">
-      <legend className="text-sm font-medium">{label}</legend>
-      <div className="flex flex-wrap gap-3">
-        {options.map((option) => (
-          <label
-            className="inline-flex h-8 items-center gap-2 rounded-md border bg-card px-3 text-sm transition-colors hover:bg-muted"
-            key={option.value}
-          >
-            <input
-              checked={selectedValues.includes(option.value)}
-              className="h-4 w-4 rounded border-input accent-primary disabled:cursor-not-allowed"
-              disabled={disabled}
-              onChange={() => onToggle(option.value)}
-              type="checkbox"
-            />
-            {showManaSymbols && option.symbol ? (
-              <ManaSymbols className="text-base" symbolClassName="text-base" value={option.symbol} />
-            ) : null}
-            <span className={showManaSymbols ? "sr-only" : undefined}>{option.label}</span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-function filterCards(cards: CardSearchResult[], rarities: RarityFilter[], colors: ColorFilter[]) {
-  return cards.filter((card) => {
-    const matchesRarity = !rarities.length || rarities.includes(card.rarity.toLowerCase() as RarityFilter);
-    const matchesColor = !colors.length || getCardColorKey(card.colors) === getSelectedColorKey(colors);
-
-    return matchesRarity && matchesColor;
-  });
-}
-
-function getCardColorKey(colors: string[]) {
-  return colors.length ? [...colors].sort().join(",") : "colorless";
-}
-
-function getSelectedColorKey(colors: ColorFilter[]) {
-  return [...colors].sort().join(",");
 }
 
 function getNextFrameFilters(activeFilters: ArtistFrameFilter[], nextFilter: ArtistFrameFilter) {
@@ -492,13 +413,4 @@ function getNextFrameFilters(activeFilters: ArtistFrameFilter[], nextFilter: Art
 
 function areSameFilters<TValue extends string>(first: TValue[], second: TValue[]) {
   return first.length === second.length && first.every((filter) => second.includes(filter));
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border bg-background/50 p-3">
-      <dt className="text-xs font-medium uppercase tracking-normal text-muted-foreground">{label}</dt>
-      <dd className="mt-1 text-sm font-semibold">{value}</dd>
-    </div>
-  );
 }

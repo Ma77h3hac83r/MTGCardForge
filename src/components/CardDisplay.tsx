@@ -13,6 +13,7 @@ type CardTileProps = {
   onClick?: () => void;
   quantity?: number;
   showName?: boolean;
+  showPrintingMeta?: boolean;
   showType?: boolean;
   showManaCost?: boolean;
 };
@@ -24,13 +25,20 @@ export function CardTile({
   onClick,
   quantity,
   showName = false,
+  showPrintingMeta = true,
   showType = false,
   showManaCost = false,
 }: CardTileProps) {
   const content = (
     <>
       <CardTileImage card={card} quantity={quantity} />
-      <CardTileBody card={card} showManaCost={showManaCost} showName={showName} showType={showType} />
+      <CardTileBody
+        card={card}
+        showManaCost={showManaCost}
+        showName={showName}
+        showPrintingMeta={showPrintingMeta}
+        showType={showType}
+      />
     </>
   );
   const className = `group block overflow-hidden rounded-lg border bg-card text-left shadow-sm transition-colors hover:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
@@ -83,11 +91,13 @@ function CardTileBody({
   card,
   showManaCost,
   showName,
+  showPrintingMeta,
   showType,
 }: {
   card: CardSearchResult;
   showManaCost: boolean;
   showName: boolean;
+  showPrintingMeta: boolean;
   showType: boolean;
 }) {
   const priceEntries = getUsdPriceLabels(card);
@@ -101,11 +111,13 @@ function CardTileBody({
         </div>
       ) : null}
       <div className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span className="min-w-0 truncate">
-          {card.setCode} #{card.collectorNumber}
-        </span>
+        {showPrintingMeta ? (
+          <span className="min-w-0 truncate">
+            {card.setCode} #{card.collectorNumber}
+          </span>
+        ) : null}
         <span className="flex min-w-0 shrink-0 items-center gap-2">
-          <SetSymbol className="text-lg" code={card.setCode} rarity={card.rarity} />
+          {showPrintingMeta ? <SetSymbol className="text-lg" code={card.setCode} rarity={card.rarity} /> : null}
           {showManaCost && card.manaCost ? <ManaSymbols className="text-sm" value={card.manaCost} /> : null}
           <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden">
             {priceEntries.length ? (
@@ -174,16 +186,19 @@ export function CardDetail({
             <DetailRow
               label="Set"
               value={
-                <span className="inline-flex items-center gap-2">
+                <a
+                  aria-label={`${card.setName}${card.setCode ? ` (${card.setCode})` : ""}`}
+                  className="inline-flex items-center gap-2 font-medium underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  href={`/sets?set=${encodeURIComponent(card.setCode)}`}
+                >
                   <SetSymbol className="text-lg" code={card.setCode} rarity={card.rarity} />
                   <span>
                     {card.setName} {card.setCode ? `(${card.setCode})` : ""}
                   </span>
-                </span>
+                </a>
               }
             />
             <DetailRow label="Collector" value={card.collectorNumber} />
-            <DetailRow label="Colors" value={getColorLabels(card.colors).join(", ")} />
             <DetailRow label="Artist" value={artistValue ?? card.artist ?? "Unknown"} />
             {showStats && card.power && card.toughness && <DetailRow label="Stats" value={`${card.power}/${card.toughness}`} />}
             {showLegalities && (
@@ -248,22 +263,6 @@ function CardDetailImages({ card }: { card: CardSearchResult }) {
       ))}
     </div>
   );
-}
-
-function getColorLabels(colors: string[]) {
-  if (!colors.length) {
-    return ["Colorless"];
-  }
-
-  const colorNames: Record<string, string> = {
-    W: "White",
-    U: "Blue",
-    B: "Black",
-    R: "Red",
-    G: "Green",
-  };
-
-  return colors.map((color) => colorNames[color] ?? color);
 }
 
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {

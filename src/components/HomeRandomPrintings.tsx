@@ -52,6 +52,28 @@ export default function HomeRandomPrintings() {
 }
 
 async function fetchRandomPrintings(signal?: AbortSignal) {
+  const cachedResponse = await fetch(`/api/random-printings?count=${RANDOM_PRINTING_COUNT}`, {
+    headers: { Accept: "application/json" },
+    signal,
+  }).catch(() => null);
+
+  if (cachedResponse?.ok) {
+    const payload = (await cachedResponse.json()) as { data?: ScryfallCard[] };
+    const cards = new Map<string, CardSearchResult>();
+
+    for (const item of payload.data ?? []) {
+      const card = normalizeScryfallCard(item);
+
+      if (card.images.length) {
+        cards.set(card.id, card);
+      }
+    }
+
+    if (cards.size) {
+      return Array.from(cards.values()).slice(0, RANDOM_PRINTING_COUNT);
+    }
+  }
+
   const requests = Array.from({ length: RANDOM_PRINTING_COUNT }, () => fetchRandomPrinting(signal));
   const results = await Promise.allSettled(requests);
   const cards = new Map<string, CardSearchResult>();

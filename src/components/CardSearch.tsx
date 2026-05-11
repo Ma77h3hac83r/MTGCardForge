@@ -1,12 +1,21 @@
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
+import { AdvancedCardFilterSections, CheckboxFilterGroup, FilteredResultsLayout } from "@/components/CardFilters";
 import { CardDetail, CardTile } from "@/components/CardDisplay";
 import { ManaLoading } from "@/components/ManaLoading";
 import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { fetchCardNameSuggestions } from "@/lib/autocomplete";
+import { getScryfallApiFetchUrl } from "@/lib/apiProxy";
+import {
+  filterCardsByAdvancedFilters,
+  toggleFilterValue,
+  type ColorFilter,
+  type PriceFilter,
+  type RarityFilter,
+} from "@/lib/cardFilters";
 import {
   type CardSearchResult,
   normalizeScryfallCard,
@@ -50,6 +59,11 @@ const SET_TYPE_FILTERS: Array<{ label: string; value: SetTypeFilter; syntax: str
   },
   { label: "Secret Lair", value: "secret-lair", syntax: "(set:sld OR set:pssc OR set:slp OR set:slc OR set:slx OR set:slu)" },
 ];
+const SET_TYPE_PANEL_FILTERS: Array<{ label: string; value: Exclude<SetTypeFilter, "all"> }> = [
+  { label: "Standard MTG", value: "standard" },
+  { label: "UB", value: "universes-beyond" },
+  { label: "SL", value: "secret-lair" },
+];
 
 export function CardSearch() {
   const [query, setQuery] = useState("");
@@ -58,6 +72,9 @@ export function CardSearch() {
   const [printings, setPrintings] = useState<CardSearchResult[]>([]);
   const [printingFilters, setPrintingFilters] = useState<PrintingFilter[]>(["all"]);
   const [setTypeFilter, setSetTypeFilter] = useState<SetTypeFilter>("all");
+  const [activeRarities, setActiveRarities] = useState<RarityFilter[]>([]);
+  const [activeColors, setActiveColors] = useState<ColorFilter[]>([]);
+  const [activePrices, setActivePrices] = useState<PriceFilter[]>([]);
   const [printingsLoading, setPrintingsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
@@ -103,6 +120,9 @@ export function CardSearch() {
       setPrintings([]);
       setPrintingFilters(["all"]);
       setSetTypeFilter("all");
+      setActiveRarities([]);
+      setActiveColors([]);
+      setActivePrices([]);
       setPrintingsLoading(false);
       setSuggestions([]);
       setSuggestionsOpen(false);
@@ -116,6 +136,9 @@ export function CardSearch() {
     setPrintings([]);
     setPrintingFilters(["all"]);
     setSetTypeFilter("all");
+    setActiveRarities([]);
+    setActiveColors([]);
+    setActivePrices([]);
     setPrintingsLoading(false);
     setSuggestions([]);
     setSuggestionsOpen(false);
@@ -123,7 +146,7 @@ export function CardSearch() {
 
     try {
       const response = await fetch(
-        `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(trimmedQuery)}`,
+        getScryfallApiFetchUrl(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(trimmedQuery)}`),
         {
           signal: controller.signal,
           headers: {
@@ -209,6 +232,18 @@ export function CardSearch() {
     void updatePrintingFilters({ nextFrame: nextFilters });
   }
 
+  function toggleRarity(nextRarity: RarityFilter) {
+    setActiveRarities((currentRarities) => toggleFilterValue(currentRarities, nextRarity));
+  }
+
+  function toggleColor(nextColor: ColorFilter) {
+    setActiveColors((currentColors) => toggleFilterValue(currentColors, nextColor));
+  }
+
+  function togglePrice(nextPrice: PriceFilter) {
+    setActivePrices((currentPrices) => toggleFilterValue(currentPrices, nextPrice));
+  }
+
   return (
     <>
       <AppNav>
@@ -291,12 +326,18 @@ export function CardSearch() {
           <>
             <CardDetail artistValue={<ArtistLink artist={card.artist} />} card={card} showLegalities showTcgplayer />
             <PrintingsGrid
+              activeColors={activeColors}
               activeFrameFilters={printingFilters}
               activeSetTypeFilter={setTypeFilter}
+              activePrices={activePrices}
               activePrintingId={card.id}
+              activeRarities={activeRarities}
               isLoading={printingsLoading}
+              onColorToggle={toggleColor}
               onFrameFilterChange={togglePrintingFrameFilter}
+              onPriceToggle={togglePrice}
               onPrintingSelect={setCard}
+              onRarityToggle={toggleRarity}
               onSetTypeFilterChange={(filter) =>
                 void updatePrintingFilters({ nextSetType: filter })
               }
@@ -318,7 +359,7 @@ async function fetchPrintings(
     return [];
   }
 
-  const response = await fetch(getPrintingsSearchUri(card.printsSearchUri, filters), {
+  const response = await fetch(getScryfallApiFetchUrl(getPrintingsSearchUri(card.printsSearchUri, filters)), {
     signal,
     headers: {
       Accept: "application/json",
@@ -407,70 +448,111 @@ function StatusPanel({ state, message }: { state: SearchState; message: string }
 }
 
 function PrintingsGrid({
+  activeColors,
   activeFrameFilters,
   activePrintingId,
+  activePrices,
+  activeRarities,
   activeSetTypeFilter,
   isLoading,
+  onColorToggle,
   onFrameFilterChange,
+  onPriceToggle,
   onPrintingSelect,
+  onRarityToggle,
   onSetTypeFilterChange,
   printings,
 }: {
+  activeColors: ColorFilter[];
   activeFrameFilters: PrintingFilter[];
   activePrintingId: string;
+  activePrices: PriceFilter[];
+  activeRarities: RarityFilter[];
   activeSetTypeFilter: SetTypeFilter;
   isLoading: boolean;
+  onColorToggle: (color: ColorFilter) => void;
   onFrameFilterChange: (filter: PrintingFilter) => void;
+  onPriceToggle: (price: PriceFilter) => void;
   onPrintingSelect: (printing: CardSearchResult) => void;
+  onRarityToggle: (rarity: RarityFilter) => void;
   onSetTypeFilterChange: (filter: SetTypeFilter) => void;
   printings: CardSearchResult[];
 }) {
+  const filteredPrintings = filterCardsByAdvancedFilters(printings, {
+    colors: activeColors,
+    prices: activePrices,
+    rarities: activeRarities,
+  });
+  const filterPanel = (
+    <>
+      <CheckboxFilterGroup
+        disabled={isLoading}
+        label="Set type"
+        onToggle={(filter) => onSetTypeFilterChange(activeSetTypeFilter === filter ? "all" : filter)}
+        options={SET_TYPE_PANEL_FILTERS}
+        selectedValues={activeSetTypeFilter === "all" ? [] : [activeSetTypeFilter]}
+      />
+      <CheckboxFilterGroup
+        disabled={isLoading}
+        label="Frame"
+        onToggle={onFrameFilterChange}
+        options={PRINTING_FILTERS}
+        selectedValues={activeFrameFilters}
+      />
+      <AdvancedCardFilterSections
+        activeFilters={{
+          colors: activeColors,
+          prices: activePrices,
+          rarities: activeRarities,
+        }}
+        disabled={isLoading}
+        onColorToggle={onColorToggle}
+        onPriceToggle={onPriceToggle}
+        onRarityToggle={onRarityToggle}
+      />
+    </>
+  );
+
   if (!printings.length) {
     return (
       <section className="space-y-4">
-        <PrintingsHeader
-          activeFrameFilters={activeFrameFilters}
-          activeSetTypeFilter={activeSetTypeFilter}
-          count={0}
-          isLoading={isLoading}
-          onFrameFilterChange={onFrameFilterChange}
-          onSetTypeFilterChange={onSetTypeFilterChange}
-        />
-        {isLoading ? (
-          <PrintingsSkeleton />
-        ) : (
-          <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground">
-            No printings matched this filter.
-          </div>
-        )}
+        <FilteredResultsLayout filters={filterPanel}>
+          {isLoading ? (
+            <PrintingsSkeleton />
+          ) : (
+            <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground">
+              No printings matched this filter.
+            </div>
+          )}
+        </FilteredResultsLayout>
       </section>
     );
   }
 
   return (
     <section className="space-y-4">
-      <PrintingsHeader
-        activeFrameFilters={activeFrameFilters}
-        activeSetTypeFilter={activeSetTypeFilter}
-        count={printings.length}
-        isLoading={isLoading}
-        onFrameFilterChange={onFrameFilterChange}
-        onSetTypeFilterChange={onSetTypeFilterChange}
-      />
-      {isLoading && <PrintingsSkeleton />}
-      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {printings.map((printing) => (
-          <CardTile
-            active={printing.id === activePrintingId}
-            card={printing}
-            key={printing.id}
-            onClick={() => {
-                onPrintingSelect(printing);
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }}
-          />
-        ))}
-      </div>
+      <FilteredResultsLayout filters={filterPanel}>
+        {isLoading && <PrintingsSkeleton />}
+        {filteredPrintings.length ? (
+          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            {filteredPrintings.map((printing) => (
+              <CardTile
+                active={printing.id === activePrintingId}
+                card={printing}
+                key={printing.id}
+                onClick={() => {
+                  onPrintingSelect(printing);
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground">
+            No printings matched this filter.
+          </div>
+        )}
+      </FilteredResultsLayout>
     </section>
   );
 }
@@ -487,119 +569,6 @@ function ArtistLink({ artist }: { artist: string | null }) {
     >
       {artist}
     </a>
-  );
-}
-
-
-function PrintingsHeader({
-  activeFrameFilters,
-  activeSetTypeFilter,
-  count,
-  isLoading,
-  onFrameFilterChange,
-  onSetTypeFilterChange,
-}: {
-  activeFrameFilters: PrintingFilter[];
-  activeSetTypeFilter: SetTypeFilter;
-  count: number;
-  isLoading: boolean;
-  onFrameFilterChange: (filter: PrintingFilter) => void;
-  onSetTypeFilterChange: (filter: SetTypeFilter) => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <h2 className="text-xl font-semibold tracking-normal">Printings</h2>
-        <p className="text-sm text-muted-foreground">
-          {isLoading ? "Loading printings" : `${count} ${count === 1 ? "printing" : "printings"}`}
-        </p>
-      </div>
-      <div className="flex flex-wrap items-end justify-end gap-4">
-        <CheckboxFilterGroup
-          disabled={isLoading}
-          label="Frame"
-          filters={PRINTING_FILTERS}
-          onToggle={onFrameFilterChange}
-          selectedValues={activeFrameFilters}
-        />
-        <SegmentedFilter
-          activeValue={activeSetTypeFilter}
-          ariaLabel="Set type filters"
-          disabled={isLoading}
-          filters={SET_TYPE_FILTERS}
-          onChange={onSetTypeFilterChange}
-        />
-      </div>
-    </div>
-  );
-}
-
-function CheckboxFilterGroup<TValue extends string>({
-  disabled,
-  filters,
-  label,
-  onToggle,
-  selectedValues,
-}: {
-  disabled: boolean;
-  filters: Array<{ label: string; value: TValue; syntax: string | null }>;
-  label: string;
-  onToggle: (filter: TValue) => void;
-  selectedValues: TValue[];
-}) {
-  return (
-    <fieldset className="space-y-2">
-      <legend className="text-sm font-medium">{label}</legend>
-      <div className="flex flex-wrap gap-3">
-        {filters.map((filter) => (
-          <label
-            className="inline-flex h-8 items-center gap-2 rounded-md border bg-card px-3 text-sm transition-colors hover:bg-muted"
-            key={filter.value}
-          >
-            <input
-              checked={selectedValues.includes(filter.value)}
-              className="h-4 w-4 rounded border-input accent-primary disabled:cursor-not-allowed"
-              disabled={disabled}
-              onChange={() => onToggle(filter.value)}
-              type="checkbox"
-            />
-            <span>{filter.label}</span>
-          </label>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-function SegmentedFilter<TValue extends string>({
-  activeValue,
-  ariaLabel,
-  disabled,
-  filters,
-  onChange,
-}: {
-  activeValue: TValue;
-  ariaLabel: string;
-  disabled: boolean;
-  filters: Array<{ label: string; value: TValue; syntax: string | null }>;
-  onChange: (filter: TValue) => void;
-}) {
-  return (
-    <div className="inline-flex rounded-lg border bg-card p-1" role="group" aria-label={ariaLabel}>
-      {filters.map((filter) => (
-        <Button
-          aria-pressed={activeValue === filter.value}
-          className="h-8 px-3"
-          disabled={disabled}
-          key={filter.value}
-          onClick={() => onChange(filter.value)}
-          type="button"
-          variant={activeValue === filter.value ? "default" : "ghost"}
-        >
-          {filter.label}
-        </Button>
-      ))}
-    </div>
   );
 }
 

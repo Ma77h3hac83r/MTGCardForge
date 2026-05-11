@@ -1,4 +1,5 @@
 import { getSafeScryfallApiUrl, normalizeScryfallCards, type CardSearchResult, type ScryfallCard } from "@/lib/scryfall";
+import { getScryfallApiFetchUrl } from "@/lib/apiProxy";
 
 type ScryfallList<T> = {
   data?: T[];
@@ -83,7 +84,7 @@ async function fetchAllArtistPages(url: string, signal?: AbortSignal) {
       throw new Error("Scryfall returned an unexpected pagination URL.");
     }
 
-    const response = await fetch(safeNextUrl, {
+    const response = await fetch(getScryfallApiFetchUrl(safeNextUrl), {
       signal,
       headers: {
         Accept: "application/json",

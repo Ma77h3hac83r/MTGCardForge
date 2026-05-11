@@ -63,6 +63,7 @@ function response(status: number, payload: unknown) {
 describe("SetSearch", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.history.replaceState(null, "", "/");
   });
 
   it("groups cards by set and provides a jump dropdown", async () => {
@@ -134,6 +135,19 @@ describe("SetSearch", () => {
     expect(await screen.findByText("Secrets of Scryfall (SOS)")).toBeInTheDocument();
   });
 
+  it("loads a set from the set query parameter", async () => {
+    window.history.replaceState(null, "", "/sets?set=SOS");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, setsPayload))
+      .mockResolvedValueOnce(response(200, cardsPayload));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SetSearch />);
+
+    expect(await screen.findByText("Secrets of Scryfall (SOS)")).toBeInTheDocument();
+    expect(screen.getByLabelText(/search by set code or set name/i)).toHaveValue("SOS");
+  });
+
   it("filters loaded set cards by rarity and color checkboxes", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(200, setsPayload)).mockResolvedValueOnce(response(200, cardsPayload)));
 
@@ -145,14 +159,12 @@ describe("SetSearch", () => {
     });
     fireEvent.submit(screen.getByRole("search"));
 
-    expect(await screen.findByText("2 cards")).toBeInTheDocument();
+    expect(await screen.findByText("$1.00")).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("Rare"));
-    expect(screen.getByText("1 card")).toBeInTheDocument();
     expect(screen.queryByText("$1.00")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("White"));
-    expect(screen.getByText("1 card")).toBeInTheDocument();
     expect(screen.queryByText("$1.00")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("Blue"));
@@ -162,7 +174,6 @@ describe("SetSearch", () => {
     expect(screen.getByText("No cards matched this filter.")).toBeInTheDocument();
 
     fireEvent.click(screen.getByLabelText("White"));
-    expect(screen.getByText("1 card")).toBeInTheDocument();
     expect(screen.getByText("$1.00")).toBeInTheDocument();
   });
 });

@@ -1,3 +1,5 @@
+import { getScryfallApiFetchUrl } from "@/lib/apiProxy";
+
 type ScryfallCatalogResponse = {
   object: string;
   data?: string[];
@@ -20,7 +22,7 @@ export async function fetchCardNameSuggestions(query: string, signal?: AbortSign
     url.searchParams.set("include_extras", "true");
   }
 
-  const response = await fetch(url.toString(), {
+  const response = await fetch(getScryfallApiFetchUrl(url.toString()), {
     signal,
     headers: {
       Accept: "application/json",
@@ -67,7 +69,7 @@ export function sortAutocompleteSuggestions(names: string[], query: string) {
 }
 
 async function fetchArtistNames(signal?: AbortSignal) {
-  artistNamesPromise ??= fetch("https://api.scryfall.com/catalog/artist-names", {
+  artistNamesPromise ??= fetch(getScryfallApiFetchUrl("https://api.scryfall.com/catalog/artist-names"), {
     signal,
     headers: {
       Accept: "application/json",

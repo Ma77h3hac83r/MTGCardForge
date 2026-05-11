@@ -46,6 +46,7 @@ describe("DeckBuilder", () => {
               set_name: "Commander Masters",
               collector_number: "400",
               type_line: "Artifact",
+              mana_cost: "{1}",
               prices: { usd: "0.99" },
               image_uris: { normal: "https://cards.scryfall.io/sol-ring.jpg" },
             },
@@ -56,6 +57,7 @@ describe("DeckBuilder", () => {
               set_name: "Phyrexia: All Will Be One",
               collector_number: "267",
               type_line: "Basic Land - Island",
+              mana_cost: "",
               prices: { usd: "0.05" },
               image_uris: { normal: "https://cards.scryfall.io/island.jpg" },
             },
@@ -70,13 +72,20 @@ describe("DeckBuilder", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /load deck/i }));
 
-    expect(await screen.findByText("Deck Summary")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /card type breakdown/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /load new deck/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/deck input/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /artifact\s*1/i })).toHaveAttribute("href", "#deck-section-artifact");
+    expect(screen.getByRole("link", { name: /basic land\s*2/i })).toHaveAttribute("href", "#deck-section-basic-land");
     expect(screen.getByText("Artifact (1)")).toBeInTheDocument();
     expect(screen.getByText("Basic Land (2)")).toBeInTheDocument();
     expect(screen.getByText("Sol Ring")).toBeInTheDocument();
     expect(screen.getByText("Island")).toBeInTheDocument();
     expect(screen.getByText("$0.99")).toBeInTheDocument();
     expect(screen.getByText("$0.05")).toBeInTheDocument();
+    expect(screen.queryByText("CMM #400")).not.toBeInTheDocument();
+    expect(screen.queryByText("ONE #267")).not.toBeInTheDocument();
+    expect(screen.queryByText("{1}")).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(1);

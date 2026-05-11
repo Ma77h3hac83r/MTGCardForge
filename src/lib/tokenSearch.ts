@@ -1,4 +1,5 @@
 import { getSafeScryfallApiUrl, normalizeScryfallCard, normalizeScryfallCards, type CardSearchResult, type ScryfallCard, type ScryfallRelatedCard } from "@/lib/scryfall";
+import { getScryfallApiFetchUrl } from "@/lib/apiProxy";
 
 type ScryfallList<T> = {
   data?: T[];
@@ -120,7 +121,7 @@ function getTokenVariantKey(token: CardSearchResult) {
 
 async function fetchExactCard(query: string, signal?: AbortSignal) {
   const response = await fetch(
-    `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(query)}`,
+    getScryfallApiFetchUrl(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(query)}`),
     {
       signal,
       headers: {
@@ -150,7 +151,7 @@ async function fetchRelatedCards(parts: ScryfallRelatedCard[], signal?: AbortSig
         return null;
       }
 
-      const response = await fetch(safeUri, {
+      const response = await fetch(getScryfallApiFetchUrl(safeUri), {
         signal,
         headers: {
           Accept: "application/json",
@@ -179,7 +180,7 @@ async function fetchAllCardPages(url: string, signal?: AbortSignal) {
       throw new Error("Scryfall returned an unexpected pagination URL.");
     }
 
-    const response = await fetch(safeNextUrl, {
+    const response = await fetch(getScryfallApiFetchUrl(safeNextUrl), {
       signal,
       headers: {
         Accept: "application/json",

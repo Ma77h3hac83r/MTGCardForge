@@ -47,16 +47,41 @@ const foilOnlyBolt = {
 function response(status: number, payload: unknown) {
   return {
     ok: status >= 200 && status < 300,
+    payload,
     status,
     json: vi.fn().mockResolvedValue(payload),
   };
 }
 
 function mockFetchSequence(...responses: Array<ReturnType<typeof response>>) {
-  const fetchMock = vi.fn();
-  responses.forEach((item) => fetchMock.mockResolvedValueOnce(item));
+  const pendingResponses = [...responses];
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+
+    if (url.includes("/cards/autocomplete") && !isCatalogResponse(pendingResponses[0])) {
+      return Promise.resolve(response(200, { object: "catalog", data: [] }));
+    }
+
+    const nextResponse = pendingResponses.shift();
+
+    if (!nextResponse) {
+      return Promise.reject(new Error(`Unexpected fetch request: ${url}`));
+    }
+
+    return Promise.resolve(nextResponse);
+  });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function isCatalogResponse(item: ReturnType<typeof response> | undefined) {
+  return Boolean(
+    item &&
+      typeof item.payload === "object" &&
+      item.payload &&
+      "object" in item.payload &&
+      item.payload.object === "catalog",
+  );
 }
 
 function fetchUrls(fetchMock: ReturnType<typeof vi.fn>) {
@@ -65,6 +90,14 @@ function fetchUrls(fetchMock: ReturnType<typeof vi.fn>) {
 
 function printingsUrls(fetchMock: ReturnType<typeof vi.fn>) {
   return fetchUrls(fetchMock).filter((url) => url.startsWith("https://api.scryfall.com/cards/search"));
+}
+
+function expectFetchUrl(fetchMock: ReturnType<typeof vi.fn>, expectedUrl: string) {
+  expect(fetchUrls(fetchMock)).toContain(expectedUrl);
+}
+
+function expectFetchUrlContaining(fetchMock: ReturnType<typeof vi.fn>, expectedValue: string) {
+  expect(fetchUrls(fetchMock).some((url) => url.includes(expectedValue))).toBe(true);
 }
 
 function submitSearch(query: string) {
@@ -142,22 +175,14 @@ describe("CardSearch", () => {
       "Temple of Sol",
       "Banners Raised",
     ]);
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://api.scryfall.com/cards/autocomplete?q=sol",
-      expect.any(Object),
-    );
+    expectFetchUrl(fetchMock, "https://api.scryfall.com/cards/autocomplete?q=sol");
 
     fireEvent.mouseDown(screen.getByRole("option", { name: "Sol Ring" }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        2,
-        "https://api.scryfall.com/cards/named?exact=Sol%20Ring",
-        expect.any(Object),
-      );
+      expectFetchUrl(fetchMock, "https://api.scryfall.com/cards/named?exact=Sol%20Ring");
     });
-    expect(await screen.findByText("1 printing")).toBeInTheDocument();
+    expect(await screen.findByText("M10 #146")).toBeInTheDocument();
   });
 
   it("looks up an exact card name and renders card details plus printings", async () => {
@@ -173,22 +198,17 @@ describe("CardSearch", () => {
     submitSearch("Lightning Bolt");
 
     expect(await screen.findByRole("heading", { name: "Lightning Bolt" })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://api.scryfall.com/cards/named?exact=Lightning%20Bolt",
-      expect.any(Object),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
+    expectFetchUrl(fetchMock, "https://api.scryfall.com/cards/named?exact=Lightning%20Bolt");
+    expectFetchUrl(
+      fetchMock,
       "https://api.scryfall.com/cards/search?q=%21%22Lightning+Bolt%22+game%3Apaper&unique=prints",
-      expect.any(Object),
     );
     expect(screen.getByRole("link", { name: /tcgplayer/i })).toHaveAttribute(
       "href",
       "https://www.tcgplayer.com/bolt",
     );
     expect(screen.getByRole("link", { name: /tcgplayer/i })).toHaveTextContent("$1.25");
-    expect(screen.getByText("3 printings")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Magic 2010 (M10)" })).toHaveAttribute("href", "/sets?set=M10");
     expect(screen.getByText("M10 #146")).toBeInTheDocument();
     expect(screen.getByText("4ED #208")).toBeInTheDocument();
     expect(screen.getByText("$2.75")).toBeInTheDocument();
@@ -280,80 +300,65 @@ describe("CardSearch", () => {
     );
 
     submitSearch("Lightning Bolt");
-    expect(await screen.findByText("2 printings")).toBeInTheDocument();
+    expect(await screen.findByText("M10 #146")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /^standard$/i }));
 
     await waitFor(() => {
-      expect(fetchUrls(fetchMock).some((url) => url.includes("is%3Adefault"))).toBe(true);
+      expectFetchUrlContaining(fetchMock, "is%3Adefault");
     });
-    expect(await screen.findByText("1 printing")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /borderless/i }));
 
     await waitFor(() => {
-      expect(fetchUrls(fetchMock).some((url) => url.includes("is%3Afull"))).toBe(true);
+      expectFetchUrlContaining(fetchMock, "is%3Afull");
     });
     expect(await screen.findByText(/no printings matched this filter/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("checkbox", { name: /extended/i }));
 
     await waitFor(() => {
-      expect(
-        fetchUrls(fetchMock).some((url) => url.includes("is%3Adefault+OR+is%3Afull+OR+is%3Aextended")),
-      ).toBe(true);
+      expectFetchUrlContaining(fetchMock, "is%3Adefault+OR+is%3Afull+OR+is%3Aextended");
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /showcase/i }));
 
     await waitFor(() => {
-      expect(
-        fetchUrls(fetchMock).some((url) =>
-          url.includes("is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase"),
-        ),
-      ).toBe(true);
+      expectFetchUrlContaining(fetchMock, "is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase");
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /^etched$/i }));
 
     await waitFor(() => {
-      expect(
-        fetchUrls(fetchMock).some((url) =>
-          url.includes("is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched"),
-        ),
-      ).toBe(true);
+      expectFetchUrlContaining(
+        fetchMock,
+        "is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched",
+      );
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /halo foil/i }));
 
     await waitFor(() => {
-      expect(
-        fetchUrls(fetchMock).some((url) =>
-          url.includes(
-            "is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched+OR+is%3Ahalo",
-          ),
-        ),
-      ).toBe(true);
+      expectFetchUrlContaining(
+        fetchMock,
+        "is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched+OR+is%3Ahalo",
+      );
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /^retro$/i }));
 
     await waitFor(() => {
-      expect(
-        fetchUrls(fetchMock).some((url) =>
-          url.includes(
-            "is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched+OR+is%3Ahalo+OR+is%3Aretro",
-          ),
-        ),
-      ).toBe(true);
+      expectFetchUrlContaining(
+        fetchMock,
+        "is%3Adefault+OR+is%3Afull+OR+is%3Aextended+OR+is%3Ashowcase+OR+is%3Aetched+OR+is%3Ahalo+OR+is%3Aretro",
+      );
     });
 
     fireEvent.click(screen.getByRole("checkbox", { name: /^all$/i }));
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(10);
+      expect(printingsUrls(fetchMock).at(-1)).not.toContain("is%3A");
     });
-    expect(printingsUrls(fetchMock).at(-1)).not.toContain("is%3A");
   });
 
   it("filters printings with Scryfall set type search syntax", async () => {
@@ -382,42 +387,28 @@ describe("CardSearch", () => {
     );
 
     submitSearch("Lightning Bolt");
-    expect(await screen.findByText("2 printings")).toBeInTheDocument();
+    expect(await screen.findByText("M10 #146")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /standard mtg/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /standard mtg/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        3,
-        expect.stringContaining("-is%3Auniversesbeyond+-set%3Asld+-set%3Apssc+-set%3Aslp+-set%3Aslc+-set%3Aslx+-set%3Aslu"),
-        expect.any(Object),
+      expectFetchUrlContaining(
+        fetchMock,
+        "-is%3Auniversesbeyond+-set%3Asld+-set%3Apssc+-set%3Aslp+-set%3Aslc+-set%3Aslx+-set%3Aslu",
       );
     });
-    expect(await screen.findByText("1 printing")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /universes beyond/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /ub/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        4,
-        expect.stringContaining("is%3Auniversesbeyond"),
-        expect.any(Object),
-      );
+      expectFetchUrlContaining(fetchMock, "is%3Auniversesbeyond");
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      4,
-      expect.stringContaining("-set%3Asld+-set%3Apssc+-set%3Aslp+-set%3Aslc+-set%3Aslx+-set%3Aslu"),
-      expect.any(Object),
-    );
+    expectFetchUrlContaining(fetchMock, "-set%3Asld+-set%3Apssc+-set%3Aslp+-set%3Aslc+-set%3Aslx+-set%3Aslu");
 
-    fireEvent.click(screen.getByRole("button", { name: /secret lair/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /sl/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        5,
-        expect.stringContaining("%28set%3Asld+OR+set%3Apssc+OR+set%3Aslp+OR+set%3Aslc+OR+set%3Aslx+OR+set%3Aslu%29"),
-        expect.any(Object),
-      );
+      expectFetchUrlContaining(fetchMock, "%28set%3Asld+OR+set%3Apssc+OR+set%3Aslp+OR+set%3Aslc+OR+set%3Aslx+OR+set%3Aslu%29");
     });
   });
 

@@ -1,13 +1,19 @@
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppNav } from "@/components/AppNav";
-import { SetSymbol } from "@/components/CardSymbols";
+import { CheckboxFilterGroup, FilteredResultsLayout } from "@/components/CardFilters";
 import { CardDetail, CardTile } from "@/components/CardDisplay";
 import { ManaLoading } from "@/components/ManaLoading";
 import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { fetchCardNameSuggestions } from "@/lib/autocomplete";
+import {
+  COLOR_FILTERS,
+  filterCardsByAdvancedFilters,
+  toggleFilterValue,
+  type ColorFilter,
+} from "@/lib/cardFilters";
 import {
   fetchCardPrintings,
   fetchTokenPrintings,
@@ -224,7 +230,6 @@ export function TokenSearch() {
 
             {(mode === "card" || tokens.length > 1) && tokens.length > 0 && (
               <ProducedObjectPicker
-                mode={mode}
                 onSelect={(token) => void selectToken(token)}
                 selectedToken={selectedToken}
                 tokens={tokens}
@@ -274,64 +279,83 @@ function TokenStatus({ state, message }: { state: SearchState; message: string }
 }
 
 function ProducedObjectPicker({
-  mode,
   onSelect,
   selectedToken,
   tokens,
 }: {
-  mode: TokenSearchMode;
+  onSelect: (token: CardSearchResult) => void;
+  selectedToken: CardSearchResult | null;
+  tokens: CardSearchResult[];
+}) {
+  const [activeColors, setActiveColors] = useState<ColorFilter[]>([]);
+  const filteredTokens = filterCardsByAdvancedFilters(tokens, {
+    colors: activeColors,
+    prices: [],
+    rarities: [],
+  });
+  const filterPanel = (
+    <CheckboxFilterGroup
+      disabled={false}
+      label="Color"
+      onToggle={(color) => setActiveColors((current) => toggleFilterValue(current, color))}
+      options={COLOR_FILTERS}
+      selectedValues={activeColors}
+      showManaSymbols
+    />
+  );
+
+  return (
+    <section className="space-y-4">
+      <FilteredResultsLayout filters={filterPanel}>
+        {filteredTokens.length ? (
+          <TokenTable onSelect={onSelect} selectedToken={selectedToken} tokens={filteredTokens} />
+        ) : (
+          <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground">
+            No cards matched this filter.
+          </div>
+        )}
+      </FilteredResultsLayout>
+    </section>
+  );
+}
+
+function TokenTable({
+  onSelect,
+  selectedToken,
+  tokens,
+}: {
   onSelect: (token: CardSearchResult) => void;
   selectedToken: CardSearchResult | null;
   tokens: CardSearchResult[];
 }) {
   return (
-    <section className="space-y-4">
-      <div>
-        <h2 className="text-xl font-semibold tracking-normal">
-          {mode === "card" ? "Tokens and Emblems Created" : "Token Versions"}
-        </h2>
-        <p className="text-sm text-muted-foreground">{tokens.length} {tokens.length === 1 ? "token" : "tokens"}</p>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-        {tokens.map((token) => (
-          <button
-            className={`rounded-lg border bg-card p-3 text-left shadow-sm transition-colors hover:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-              selectedToken?.id === token.id ? "ring-2 ring-ring" : ""
-            }`}
-            key={token.id}
-            onClick={() => onSelect(token)}
-            type="button"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="font-semibold">{token.name}</h3>
-                <p className="mt-1 text-sm text-muted-foreground">{token.typeLine}</p>
-                <TokenColors colors={token.colors} />
-              </div>
-              <SetSymbol className="text-lg" code={token.setCode} rarity={token.rarity} />
-            </div>
-            {token.power && token.toughness && (
-              <p className="mt-2 text-sm font-medium">
-                {token.power}/{token.toughness}
-              </p>
-            )}
-          </button>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function TokenColors({ colors }: { colors: string[] }) {
-  const labels = getColorLabels(colors);
-
-  return (
-    <div className="mt-2 flex flex-wrap gap-1">
-      {labels.map((label) => (
-        <span className="rounded-sm border bg-background/60 px-1.5 py-0.5 text-xs font-medium text-muted-foreground" key={label}>
-          {label}
-        </span>
-      ))}
+    <div className="overflow-hidden rounded-lg border bg-card shadow-sm">
+      <table className="w-full text-left text-sm">
+        <thead className="border-b bg-muted/50 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2">Card Name</th>
+            <th className="px-3 py-2">Type</th>
+            <th className="px-3 py-2">Colors</th>
+            <th className="px-3 py-2">P/T</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {tokens.map((token) => (
+            <tr
+              className={`cursor-pointer transition-colors hover:bg-muted/50 ${
+                selectedToken?.id === token.id ? "bg-primary/10" : ""
+              }`}
+              key={token.id}
+              onClick={() => onSelect(token)}
+            >
+              <td className="px-3 py-2 font-medium">{token.name}</td>
+              <td className="px-3 py-2 text-muted-foreground">{token.typeLine}</td>
+              <td className="px-3 py-2">{getColorLabels(token.colors).join(", ")}</td>
+              <td className="px-3 py-2">{token.power && token.toughness ? `${token.power}/${token.toughness}` : ""}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -357,7 +381,6 @@ function CardGrid({ cards, title }: { cards: CardSearchResult[]; title: string }
     <section className="space-y-4">
       <div>
         <h2 className="text-xl font-semibold tracking-normal">{title}</h2>
-        <p className="text-sm text-muted-foreground">{cards.length} {cards.length === 1 ? "card" : "cards"}</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {cards.map((card) => (
