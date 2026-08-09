@@ -1,5 +1,6 @@
+import { scryfallFetch } from "@/lib/apiProxy";
+import { dedupedFetch } from "@/lib/dedupedFetch";
 import { getSafeScryfallApiUrl, normalizeScryfallCard, type CardSearchResult, type ScryfallCard } from "@/lib/scryfall";
-import { getScryfallApiFetchUrl } from "@/lib/apiProxy";
 
 type ScryfallList<T> = {
   data?: T[];
@@ -67,42 +68,115 @@ export function parseDeckList(input: string) {
   return mergeCardQuantities(cards);
 }
 
-export async function resolveDeckCards(cards: DeckInputCard[], signal?: AbortSignal) {
-  const cardNames = cards.map((card) => card.name);
-  const cheapestPrintings = await fetchCheapestPrintings(cardNames, signal);
-  const missingNames = cards
-    .filter((card) => !cheapestPrintings.has(getCardNameKey(card.name)))
-    .map((card) => card.name);
-  const alternateNamePrintings = missingNames.length
-    ? await fetchAlternateNamePrintings(missingNames, signal)
-    : new Map<string, CardSearchResult>();
-  const fallbackNames = missingNames.filter((name) => !alternateNamePrintings.has(getCardNameKey(name)));
-  const fallbackCards = fallbackNames.length
-    ? await fetchExactFallbackCards(fallbackNames, signal)
-    : new Map<string, CardSearchResult>();
-  const fuzzyNames = fallbackNames.filter((name) => !fallbackCards.has(getCardNameKey(name)));
-  const fuzzyCards = fuzzyNames.length
-    ? await fetchFuzzyFallbackCards(fuzzyNames, signal)
-    : new Map<string, CardSearchResult>();
+export type DeckResolvePhase = "collection" | "cheapest" | "fallback" | "done";
 
-  return cards.map((card) => ({
-    ...card,
-    card:
-      cheapestPrintings.get(getCardNameKey(card.name)) ??
-      alternateNamePrintings.get(getCardNameKey(card.name)) ??
-      fallbackCards.get(getCardNameKey(card.name)) ??
-      fuzzyCards.get(getCardNameKey(card.name)) ??
-      null,
-  }));
+export type DeckResolveProgress = {
+  cards: DeckResolvedCard[];
+  resolvedCount: number;
+  totalCount: number;
+  phase: DeckResolvePhase;
+  done: boolean;
+};
+
+export async function resolveDeckCards(cards: DeckInputCard[], signal?: AbortSignal) {
+  let resolvedCards: DeckResolvedCard[] = cards.map((card) => ({ ...card, card: null }));
+
+  await streamResolveDeckCards(
+    cards,
+    (progress) => {
+      resolvedCards = progress.cards;
+    },
+    signal,
+  );
+
+  return resolvedCards;
+}
+
+/** Resolves deck cards with progressive updates for faster perceived load. */
+export async function streamResolveDeckCards(
+  cards: DeckInputCard[],
+  onProgress: (progress: DeckResolveProgress) => void,
+  signal?: AbortSignal,
+) {
+  const printings = new Map<string, CardSearchResult>();
+  const uniqueNames = Array.from(new Set(cards.map((card) => card.name.trim()).filter(Boolean)));
+
+  const emit = (phase: DeckResolvePhase, done = false) => {
+    const resolvedCards = cards.map((card) => ({
+      ...card,
+      card: printings.get(getCardNameKey(card.name)) ?? null,
+    }));
+
+    onProgress({
+      cards: resolvedCards,
+      resolvedCount: resolvedCards.filter((card) => Boolean(card.card)).length,
+      totalCount: cards.length,
+      phase,
+      done,
+    });
+  };
+
+  emit("collection");
+
+  // Phase 1: bulk identity via /cards/collection for a fast first paint.
+  await fetchExactFallbackCards(uniqueNames, signal, {
+    onChunk: (chunkCards) => {
+      mergePrintings(printings, chunkCards);
+      emit("collection");
+    },
+  });
+
+  const namesNeedingCheapest = uniqueNames.filter((name) => printings.has(getCardNameKey(name)));
+  const missingAfterCollection = uniqueNames.filter((name) => !printings.has(getCardNameKey(name)));
+
+  // Phase 2: upgrade collection hits to cheapest paper USD printings.
+  if (namesNeedingCheapest.length) {
+    await fetchCheapestPrintings(namesNeedingCheapest, signal, {
+      onChunk: (chunkCards) => {
+        mergePrintings(printings, chunkCards);
+        emit("cheapest");
+      },
+    });
+  }
+
+  // Still try exact cheapest search for collection misses (rare edge cases).
+  if (missingAfterCollection.length) {
+    await fetchCheapestPrintings(missingAfterCollection, signal, {
+      onChunk: (chunkCards) => {
+        mergePrintings(printings, chunkCards);
+        emit("cheapest");
+      },
+    });
+  }
+
+  let missingNames = uniqueNames.filter((name) => !printings.has(getCardNameKey(name)));
+
+  // Phase 3: alternate-name / phrase search for remaining misses.
+  if (missingNames.length) {
+    const alternateNamePrintings = await fetchAlternateNamePrintings(missingNames, signal);
+    mergePrintings(printings, alternateNamePrintings);
+    emit("fallback");
+    missingNames = uniqueNames.filter((name) => !printings.has(getCardNameKey(name)));
+  }
+
+  // Phase 4: fuzzy named lookup for remaining misses.
+  if (missingNames.length) {
+    const fuzzyCards = await fetchFuzzyFallbackCards(missingNames, signal);
+    mergePrintings(printings, fuzzyCards);
+    emit("fallback");
+  }
+
+  emit("done", true);
+}
+
+function mergePrintings(target: Map<string, CardSearchResult>, source: Map<string, CardSearchResult>) {
+  for (const [key, card] of source) {
+    target.set(key, card);
+  }
 }
 
 export async function fetchCheapestPrinting(cardName: string, signal?: AbortSignal) {
-  const response = await fetch(getScryfallApiFetchUrl(buildCheapestPrintingUrl(cardName)), {
-    signal,
-    headers: {
-      Accept: "application/json",
-    },
-  });
+  const response = await scryfallFetch(buildCheapestPrintingUrl(cardName), { signal });
 
   if (response.ok) {
     const payload = (await response.json()) as ScryfallList<ScryfallCard>;
@@ -116,7 +190,11 @@ export async function fetchCheapestPrinting(cardName: string, signal?: AbortSign
   return fetchExactFallback(cardName, signal);
 }
 
-export async function fetchCheapestPrintings(cardNames: string[], signal?: AbortSignal) {
+export async function fetchCheapestPrintings(
+  cardNames: string[],
+  signal?: AbortSignal,
+  options: { onChunk?: (printings: Map<string, CardSearchResult>) => void } = {},
+) {
   const printings = new Map<string, CardSearchResult>();
   const uniqueNames = Array.from(new Set(cardNames.map((name) => name.trim()).filter(Boolean)));
 
@@ -126,6 +204,7 @@ export async function fetchCheapestPrintings(cardNames: string[], signal?: Abort
     }
 
     const cards = await fetchAllSearchPages(buildCheapestPrintingsUrl(chunk), signal);
+    const chunkPrintings = new Map<string, CardSearchResult>();
 
     for (const card of cards) {
       const normalizedCard = normalizeScryfallCard(card);
@@ -133,8 +212,11 @@ export async function fetchCheapestPrintings(cardNames: string[], signal?: Abort
 
       if (!printings.has(key)) {
         printings.set(key, normalizedCard);
+        chunkPrintings.set(key, normalizedCard);
       }
     }
+
+    options.onChunk?.(chunkPrintings);
   }
 
   return printings;
@@ -508,12 +590,10 @@ async function fetchExactFallback(cardName: string, signal?: AbortSignal) {
 }
 
 async function fetchNamedCard(cardName: string, mode: "exact" | "fuzzy", signal?: AbortSignal) {
-  const response = await fetch(getScryfallApiFetchUrl(`https://api.scryfall.com/cards/named?${mode}=${encodeURIComponent(cardName)}`), {
-    signal,
-    headers: {
-      Accept: "application/json",
-    },
-  });
+  const response = await scryfallFetch(
+    `https://api.scryfall.com/cards/named?${mode}=${encodeURIComponent(cardName)}`,
+    { signal },
+  );
 
   if (!response.ok) {
     return null;
@@ -522,7 +602,11 @@ async function fetchNamedCard(cardName: string, mode: "exact" | "fuzzy", signal?
   return (await response.json()) as ScryfallCard;
 }
 
-async function fetchExactFallbackCards(cardNames: string[], signal?: AbortSignal) {
+async function fetchExactFallbackCards(
+  cardNames: string[],
+  signal?: AbortSignal,
+  options: { onChunk?: (printings: Map<string, CardSearchResult>) => void } = {},
+) {
   const cards = new Map<string, CardSearchResult>();
   const uniqueNames = Array.from(new Set(cardNames.map((name) => name.trim()).filter(Boolean)));
 
@@ -531,7 +615,7 @@ async function fetchExactFallbackCards(cardNames: string[], signal?: AbortSignal
       await waitForScryfall(signal);
     }
 
-    const response = await fetch("https://api.scryfall.com/cards/collection", {
+    const response = await dedupedFetch("https://api.scryfall.com/cards/collection", {
       method: "POST",
       signal,
       headers: {
@@ -544,15 +628,36 @@ async function fetchExactFallbackCards(cardNames: string[], signal?: AbortSignal
     });
 
     if (!response.ok) {
+      options.onChunk?.(new Map());
       continue;
     }
 
     const payload = (await response.json()) as ScryfallCollectionResponse;
+    const chunkPrintings = new Map<string, CardSearchResult>();
+    const foundByName = new Map<string, CardSearchResult>();
 
     for (const card of payload.data ?? []) {
       const normalizedCard = normalizeScryfallCard(card);
-      cards.set(getCardNameKey(normalizedCard.name), normalizedCard);
+      const cardKey = getCardNameKey(normalizedCard.name);
+      foundByName.set(cardKey, normalizedCard);
+      cards.set(cardKey, normalizedCard);
+      chunkPrintings.set(cardKey, normalizedCard);
     }
+
+    // Map collection hits back onto the requested names in this chunk.
+    for (const requestedName of chunk) {
+      const requestedKey = getCardNameKey(requestedName);
+      const match =
+        foundByName.get(requestedKey) ??
+        Array.from(foundByName.values()).find((card) => getCardNameKey(card.name) === requestedKey);
+
+      if (match) {
+        cards.set(requestedKey, match);
+        chunkPrintings.set(requestedKey, match);
+      }
+    }
+
+    options.onChunk?.(chunkPrintings);
   }
 
   return cards;
@@ -609,12 +714,7 @@ async function fetchAllSearchPages(url: string, signal?: AbortSignal) {
       throw new Error("Scryfall returned an unexpected pagination URL.");
     }
 
-    const response = await fetch(getScryfallApiFetchUrl(safeNextUrl), {
-      signal,
-      headers: {
-        Accept: "application/json",
-      },
-    });
+    const response = await scryfallFetch(safeNextUrl, { signal });
 
     if (response.status === 404) {
       return cards;

@@ -1,7 +1,8 @@
 ---
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
+import SiteFooter from "@/components/SiteFooter.astro";
 import faviconUrl from "@/images/favicon.ico";
 import logoUrl from "@/images/logo.png";
-import SiteFooter from "@/components/SiteFooter.astro";
 import { NAV_ITEMS } from "@/lib/navigation";
 import "@/styles/global.css";
 
@@ -49,5 +50,6 @@ const logoSrc = typeof logoUrl === "string" ? logoUrl : logoUrl.src;
       <slot />
     </main>
     <SiteFooter />
+    <ServiceWorkerRegister client:load />
   </body>
 </html>

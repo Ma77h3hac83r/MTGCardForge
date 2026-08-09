@@ -48,6 +48,15 @@ function response(status: number, payload: unknown) {
   };
 }
 
+function deferredResponse() {
+  let resolve!: (value: ReturnType<typeof response>) => void;
+  const promise = new Promise<ReturnType<typeof response>>((nextResolve) => {
+    resolve = nextResolve;
+  });
+
+  return { promise, resolve };
+}
+
 describe("ArtistSearch", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -118,6 +127,47 @@ describe("ArtistSearch", () => {
 
     const calledUrl = new URL(String(fetchMock.mock.calls[0][0]));
     expect(calledUrl.searchParams.get("q")).toBe('artist:"Rebecca Guay" game:paper');
+  });
+
+  it("keeps newer artist search results when an older request resolves later", async () => {
+    const oldSearch = deferredResponse();
+    const newSearch = deferredResponse();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const searchQuery = url.searchParams.get("q") ?? "";
+
+      if (searchQuery.includes("Old Artist")) {
+        return oldSearch.promise;
+      }
+
+      if (searchQuery.includes("New Artist")) {
+        return newSearch.promise;
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch request: ${url.toString()}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ArtistSearch />);
+    fireEvent.change(screen.getByLabelText(/search by artist name/i), {
+      target: { value: "Old Artist" },
+    });
+    fireEvent.submit(screen.getByRole("search"));
+    fireEvent.change(screen.getByLabelText(/search by artist name/i), {
+      target: { value: "New Artist" },
+    });
+    fireEvent.submit(screen.getByRole("search"));
+
+    newSearch.resolve(response(200, { object: "list", has_more: false, data: [{ ...artistCard, artist: "New Artist" }] }));
+
+    expect(await screen.findByRole("heading", { name: "New Artist" })).toBeInTheDocument();
+
+    oldSearch.resolve(response(200, { object: "list", has_more: false, data: [{ ...artistCard, artist: "Old Artist" }] }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "New Artist" })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("heading", { name: "Old Artist" })).not.toBeInTheDocument();
   });
 
   it("filters artist cards by rarity and exact color identity", async () => {

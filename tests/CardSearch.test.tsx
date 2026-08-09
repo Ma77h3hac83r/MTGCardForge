@@ -53,6 +53,15 @@ function response(status: number, payload: unknown) {
   };
 }
 
+function deferredResponse() {
+  let resolve!: (value: ReturnType<typeof response>) => void;
+  const promise = new Promise<ReturnType<typeof response>>((nextResolve) => {
+    resolve = nextResolve;
+  });
+
+  return { promise, resolve };
+}
+
 function mockFetchSequence(...responses: Array<ReturnType<typeof response>>) {
   const pendingResponses = [...responses];
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
@@ -150,6 +159,72 @@ describe("CardSearch", () => {
     submitSearch("Lightning Bolt");
 
     expect(document.querySelectorAll(".animate-pulse")).toHaveLength(2);
+  });
+
+  it("keeps newer exact search results when an older request resolves later", async () => {
+    const oldExact = deferredResponse();
+    const oldPrintings = deferredResponse();
+    const newExact = deferredResponse();
+    const newPrintings = deferredResponse();
+    const oldCard = {
+      ...lightningBolt,
+      id: "old-card",
+      name: "Old Spell",
+      prints_search_uri: "https://api.scryfall.com/cards/search?q=%21%22Old%20Spell%22&unique=prints",
+    };
+    const newCard = {
+      ...lightningBolt,
+      id: "new-card",
+      name: "New Spell",
+      collector_number: "999",
+      prints_search_uri: "https://api.scryfall.com/cards/search?q=%21%22New%20Spell%22&unique=prints",
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/cards/named") && url.includes("Old%20Spell")) {
+        return oldExact.promise;
+      }
+
+      if (url.includes("/cards/named") && url.includes("New%20Spell")) {
+        return newExact.promise;
+      }
+
+      if (url.includes("/cards/search") && url.includes("Old+Spell")) {
+        return oldPrintings.promise;
+      }
+
+      if (url.includes("/cards/search") && url.includes("New+Spell")) {
+        return newPrintings.promise;
+      }
+
+      return Promise.reject(new Error(`Unexpected fetch request: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CardSearch />);
+    fireEvent.change(screen.getByLabelText(/search by exact card name/i), {
+      target: { value: "Old Spell" },
+    });
+    fireEvent.submit(screen.getByRole("search"));
+    fireEvent.change(screen.getByLabelText(/search by exact card name/i), {
+      target: { value: "New Spell" },
+    });
+    fireEvent.submit(screen.getByRole("search"));
+
+    newExact.resolve(response(200, newCard));
+    await waitFor(() => expectFetchUrlContaining(fetchMock, "New+Spell"));
+    newPrintings.resolve(response(200, { object: "list", total_cards: 1, data: [newCard] }));
+
+    expect(await screen.findByRole("heading", { name: "New Spell" })).toBeInTheDocument();
+
+    oldExact.resolve(response(200, oldCard));
+    oldPrintings.resolve(response(200, { object: "list", total_cards: 1, data: [oldCard] }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "New Spell" })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("heading", { name: "Old Spell" })).not.toBeInTheDocument();
   });
 
   it("shows autocomplete suggestions with prefix matches before contains matches", async () => {

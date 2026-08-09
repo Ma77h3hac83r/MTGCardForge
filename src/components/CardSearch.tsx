@@ -1,14 +1,16 @@
 import { Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { AdvancedCardFilterSections, CheckboxFilterGroup, FilteredResultsLayout } from "@/components/CardFilters";
 import { CardDetail, CardTile } from "@/components/CardDisplay";
 import { ManaLoading } from "@/components/ManaLoading";
+import { SearchCombobox } from "@/components/SearchCombobox";
 import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
+import { VirtualizedCardGrid } from "@/components/VirtualizedCardGrid";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useDebouncedAsync } from "@/hooks/useDebouncedAsync";
 import { fetchCardNameSuggestions } from "@/lib/autocomplete";
-import { getScryfallApiFetchUrl } from "@/lib/apiProxy";
+import { scryfallFetch } from "@/lib/apiProxy";
 import {
   filterCardsByAdvancedFilters,
   toggleFilterValue,
@@ -79,42 +81,39 @@ export function CardSearch() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const searchControllerRef = useRef<AbortController | null>(null);
+  const printingsControllerRef = useRef<AbortController | null>(null);
+
+  const trimmedQuery = query.trim();
+  const suggestionsEnabled = trimmedQuery.length >= 2 && state !== "loading";
 
   useEffect(() => {
-    const trimmedQuery = query.trim();
-
-    if (trimmedQuery.length < 2 || state === "loading") {
+    if (!suggestionsEnabled) {
       setSuggestions([]);
       setSuggestionsOpen(false);
-      return;
     }
+  }, [suggestionsEnabled]);
 
-    const controller = new AbortController();
-    const timeout = window.setTimeout(async () => {
-      try {
-        const sortedSuggestions = await fetchCardNameSuggestions(trimmedQuery, controller.signal);
-        setSuggestions(sortedSuggestions);
-        setSuggestionsOpen(sortedSuggestions.length > 0);
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return;
-        }
-
-        setSuggestions([]);
-        setSuggestionsOpen(false);
-      }
-    }, 250);
-
-    return () => {
-      controller.abort();
-      window.clearTimeout(timeout);
-    };
-  }, [query, state]);
+  useDebouncedAsync(
+    suggestionsEnabled,
+    [trimmedQuery],
+    (signal) => fetchCardNameSuggestions(trimmedQuery, signal),
+    (sortedSuggestions) => {
+      setSuggestions(sortedSuggestions);
+      setSuggestionsOpen(sortedSuggestions.length > 0);
+    },
+    () => {
+      setSuggestions([]);
+      setSuggestionsOpen(false);
+    },
+  );
 
   async function searchExactCard(cardName = query) {
     const trimmedQuery = cardName.trim();
 
     if (!trimmedQuery) {
+      searchControllerRef.current?.abort();
+      printingsControllerRef.current?.abort();
       setState("idle");
       setCard(null);
       setPrintings([]);
@@ -131,6 +130,9 @@ export function CardSearch() {
     }
 
     const controller = new AbortController();
+    searchControllerRef.current?.abort();
+    printingsControllerRef.current?.abort();
+    searchControllerRef.current = controller;
     setState("loading");
     setCard(null);
     setPrintings([]);
@@ -145,14 +147,9 @@ export function CardSearch() {
     setMessage("");
 
     try {
-      const response = await fetch(
-        getScryfallApiFetchUrl(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(trimmedQuery)}`),
-        {
-          signal: controller.signal,
-          headers: {
-            Accept: "application/json",
-          },
-        },
+      const response = await scryfallFetch(
+        `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(trimmedQuery)}`,
+        { signal: controller.signal },
       );
 
       const payload = (await response.json()) as ScryfallCard & { details?: string };
@@ -174,20 +171,30 @@ export function CardSearch() {
       }
 
       const normalizedCard = normalizeScryfallCard(payload);
+      if (searchControllerRef.current !== controller) {
+        return;
+      }
       const normalizedPrintings = await fetchPrintings(normalizedCard, controller.signal, {
         frame: "all",
         setType: "all",
       });
+      if (searchControllerRef.current !== controller) {
+        return;
+      }
       setCard(normalizedCard);
       setPrintings(normalizedPrintings);
       setState("results");
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (searchControllerRef.current !== controller || (error instanceof DOMException && error.name === "AbortError")) {
         return;
       }
 
       setState("error");
       setMessage(error instanceof Error ? error.message : "Unable to search Scryfall.");
+    } finally {
+      if (searchControllerRef.current === controller) {
+        searchControllerRef.current = null;
+      }
     }
   }
 
@@ -205,6 +212,8 @@ export function CardSearch() {
     }
 
     const controller = new AbortController();
+    printingsControllerRef.current?.abort();
+    printingsControllerRef.current = controller;
     setPrintingFilters(nextFrameFilters);
     setSetTypeFilter(nextSetType);
     setPrintingsLoading(true);
@@ -215,15 +224,21 @@ export function CardSearch() {
         frame: nextFrame,
         setType: nextSetType,
       });
+      if (printingsControllerRef.current !== controller) {
+        return;
+      }
       setPrintings(normalizedPrintings);
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (printingsControllerRef.current !== controller || (error instanceof DOMException && error.name === "AbortError")) {
         return;
       }
 
       setPrintings([]);
     } finally {
-      setPrintingsLoading(false);
+      if (printingsControllerRef.current === controller) {
+        setPrintingsLoading(false);
+        printingsControllerRef.current = null;
+      }
     }
   }
 
@@ -256,55 +271,22 @@ export function CardSearch() {
             }}
             role="search"
           >
-            <label className="sr-only" htmlFor="card-search">
-              Search by exact card name
-            </label>
-            <Input
+            <SearchCombobox
               id="card-search"
-              aria-autocomplete="list"
-              aria-controls="card-search-suggestions"
-              aria-expanded={suggestionsOpen}
-              autoComplete="off"
+              label="Search by exact card name"
+              open={suggestionsOpen}
+              options={suggestions}
               placeholder="Exact card name"
-              role="combobox"
               value={query}
-              className="pr-12"
-              onBlur={() => {
-                window.setTimeout(() => setSuggestionsOpen(false), 120);
-              }}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setSuggestionsOpen(true);
-              }}
-              onFocus={() => {
-                if (suggestions.length) {
-                  setSuggestionsOpen(true);
-                }
+              getOptionKey={(suggestion) => suggestion}
+              getOptionLabel={(suggestion) => suggestion}
+              onChange={setQuery}
+              onOpenChange={setSuggestionsOpen}
+              onSelect={(suggestion) => {
+                setQuery(suggestion);
+                void searchExactCard(suggestion);
               }}
             />
-            {suggestionsOpen && (
-              <div
-                className="absolute left-0 right-0 top-12 z-30 overflow-hidden rounded-lg border bg-card shadow-lg"
-                id="card-search-suggestions"
-                role="listbox"
-              >
-                {suggestions.map((suggestion) => (
-                  <button
-                    className="block w-full px-3 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
-                    key={suggestion}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      setQuery(suggestion);
-                      void searchExactCard(suggestion);
-                    }}
-                    role="option"
-                    type="button"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            )}
             <Button
               aria-label="Search"
               className="absolute right-1 top-1/2 h-9 w-9 -translate-y-1/2"
@@ -359,12 +341,7 @@ async function fetchPrintings(
     return [];
   }
 
-  const response = await fetch(getScryfallApiFetchUrl(getPrintingsSearchUri(card.printsSearchUri, filters)), {
-    signal,
-    headers: {
-      Accept: "application/json",
-    },
-  });
+  const response = await scryfallFetch(getPrintingsSearchUri(card.printsSearchUri, filters), { signal });
 
   if (!response.ok) {
     return [];
@@ -534,19 +511,20 @@ function PrintingsGrid({
       <FilteredResultsLayout filters={filterPanel}>
         {isLoading && <PrintingsSkeleton />}
         {filteredPrintings.length ? (
-          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {filteredPrintings.map((printing) => (
+          <VirtualizedCardGrid
+            getKey={(printing) => printing.id}
+            items={filteredPrintings}
+            renderItem={(printing) => (
               <CardTile
                 active={printing.id === activePrintingId}
                 card={printing}
-                key={printing.id}
                 onClick={() => {
                   onPrintingSelect(printing);
                   window.scrollTo({ top: 0, behavior: "smooth" });
                 }}
               />
-            ))}
-          </div>
+            )}
+          />
         ) : (
           <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground">
             No printings matched this filter.

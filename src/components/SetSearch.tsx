@@ -1,14 +1,15 @@
 import { Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { AdvancedCardFilterSections, CheckboxFilterGroup, FilteredResultsLayout } from "@/components/CardFilters";
 import { SetSymbol } from "@/components/CardSymbols";
 import { CardTile } from "@/components/CardDisplay";
 import { ManaLoading } from "@/components/ManaLoading";
+import { SearchCombobox } from "@/components/SearchCombobox";
 import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
+import { VirtualizedCardGrid } from "@/components/VirtualizedCardGrid";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import {
   filterCardsByAdvancedFilters,
   toggleFilterValue,
@@ -18,11 +19,11 @@ import {
 } from "@/lib/cardFilters";
 import {
   fetchAllSets,
-  fetchSetCards,
   formatSetSuggestion,
   resolveSetWithSubsets,
   SET_CARD_FILTERS,
   sortSetSuggestions,
+  streamSetCards,
   type SetSearchFilter,
   type ScryfallSet,
 } from "@/lib/setSearch";
@@ -42,8 +43,11 @@ export function SetSearch() {
   const [activeColors, setActiveColors] = useState<ColorFilter[]>([]);
   const [activePrices, setActivePrices] = useState<PriceFilter[]>([]);
   const [cardsLoading, setCardsLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const searchControllerRef = useRef<AbortController | null>(null);
+  const cardsControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -72,6 +76,8 @@ export function SetSearch() {
     const resolvedSet = resolveSetWithSubsets(availableSets, nextQuery);
 
     if (!resolvedSet) {
+      searchControllerRef.current?.abort();
+      cardsControllerRef.current?.abort();
       setState(nextQuery.trim() ? "empty" : "idle");
       setRootSet(null);
       setRelatedSets([]);
@@ -80,11 +86,15 @@ export function SetSearch() {
       setActiveRarities([]);
       setActiveColors([]);
       setActivePrices([]);
+      setLoadingMore(false);
       setMessage(nextQuery.trim() ? `No set found for "${nextQuery.trim()}".` : "");
       return;
     }
 
     const controller = new AbortController();
+    searchControllerRef.current?.abort();
+    cardsControllerRef.current?.abort();
+    searchControllerRef.current = controller;
     setState("loading");
     setRootSet(resolvedSet.rootSet);
     setRelatedSets(resolvedSet.relatedSets);
@@ -93,20 +103,60 @@ export function SetSearch() {
     setActiveRarities([]);
     setActiveColors([]);
     setActivePrices([]);
+    setCardsLoading(false);
+    setLoadingMore(false);
     setSuggestionsOpen(false);
     setMessage("");
 
+    let latestCards: CardSearchResult[] = [];
+
     try {
-      const result = await fetchSetCards(resolvedSet.relatedSets, "all", controller.signal);
-      setCards(result.cards);
-      setState("results");
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      await streamSetCards(
+        resolvedSet.relatedSets,
+        "all",
+        (update) => {
+          if (searchControllerRef.current !== controller) {
+            return;
+          }
+
+          latestCards = update.cards;
+          setCards(update.cards);
+          setLoadingMore(!update.done);
+
+          if (update.cards.length) {
+            setState("results");
+          } else if (update.done) {
+            setState("empty");
+            setMessage(`No paper cards found for set "${resolvedSet.rootSet.name}".`);
+          }
+        },
+        controller.signal,
+      );
+
+      if (searchControllerRef.current !== controller) {
         return;
       }
 
-      setState("error");
-      setMessage(error instanceof Error ? error.message : "Unable to load cards for this set.");
+      if (!latestCards.length) {
+        setState("empty");
+        setMessage(`No paper cards found for set "${resolvedSet.rootSet.name}".`);
+      }
+    } catch (error) {
+      if (searchControllerRef.current !== controller || (error instanceof DOMException && error.name === "AbortError")) {
+        return;
+      }
+
+      // Keep any cards already rendered from earlier pages.
+      setLoadingMore(false);
+      if (!latestCards.length) {
+        setState("error");
+        setMessage(error instanceof Error ? error.message : "Unable to load cards for this set.");
+      }
+    } finally {
+      if (searchControllerRef.current === controller) {
+        setLoadingMore(false);
+        searchControllerRef.current = null;
+      }
     }
   }
 
@@ -116,21 +166,40 @@ export function SetSearch() {
     }
 
     const controller = new AbortController();
+    cardsControllerRef.current?.abort();
+    cardsControllerRef.current = controller;
     setActiveFilters(nextFilters);
     setCards([]);
     setCardsLoading(true);
+    setLoadingMore(false);
 
     try {
-      const result = await fetchSetCards(relatedSets, nextFilters, controller.signal);
-      setCards(result.cards);
+      await streamSetCards(
+        relatedSets,
+        nextFilters,
+        (update) => {
+          if (cardsControllerRef.current !== controller) {
+            return;
+          }
+
+          setCards(update.cards);
+          setCardsLoading(false);
+          setLoadingMore(!update.done);
+        },
+        controller.signal,
+      );
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (cardsControllerRef.current !== controller || (error instanceof DOMException && error.name === "AbortError")) {
         return;
       }
 
-      setCards([]);
+      setCards((currentCards) => (currentCards.length ? currentCards : []));
     } finally {
-      setCardsLoading(false);
+      if (cardsControllerRef.current === controller) {
+        setCardsLoading(false);
+        setLoadingMore(false);
+        cardsControllerRef.current = null;
+      }
     }
   }
 
@@ -163,58 +232,34 @@ export function SetSearch() {
             }}
             role="search"
           >
-            <label className="sr-only" htmlFor="set-search">
-              Search by set code or set name
-            </label>
-            <Input
+            <SearchCombobox
               id="set-search"
-              aria-autocomplete="list"
-              aria-controls="set-search-suggestions"
-              aria-expanded={suggestionsOpen}
-              autoComplete="off"
-              className="pr-12"
+              label="Search by set code or set name"
+              open={suggestionsOpen}
+              options={suggestions}
               placeholder="Set code or name"
-              role="combobox"
               value={query}
-              onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)}
-              onChange={(event) => {
-                setQuery(event.target.value);
+              getOptionKey={(set) => set.id}
+              getOptionLabel={(set) => formatSetSuggestion(set)}
+              onChange={(nextValue) => {
+                setQuery(nextValue);
                 setSuggestionsOpen(true);
               }}
-              onFocus={() => {
-                if (suggestions.length) {
-                  setSuggestionsOpen(true);
-                }
+              onOpenChange={setSuggestionsOpen}
+              onSelect={(set) => {
+                const suggestion = formatSetSuggestion(set);
+                setQuery(suggestion);
+                void searchSet(suggestion);
               }}
+              renderOption={(set) => (
+                <span className="flex w-full items-center justify-between gap-3">
+                  <span className="min-w-0 truncate">{set.name}</span>
+                  <span className="shrink-0 text-xs font-medium text-muted-foreground">
+                    {set.code.toUpperCase()}
+                  </span>
+                </span>
+              )}
             />
-            {suggestionsOpen && suggestions.length > 0 && (
-              <div
-                className="absolute left-0 right-0 top-12 z-30 overflow-hidden rounded-lg border bg-card shadow-lg"
-                id="set-search-suggestions"
-                role="listbox"
-              >
-                {suggestions.map((set) => (
-                  <button
-                    aria-label={formatSetSuggestion(set)}
-                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
-                    key={set.id}
-                    onPointerDown={(event) => {
-                      event.preventDefault();
-                      const suggestion = formatSetSuggestion(set);
-                      setQuery(suggestion);
-                      void searchSet(suggestion);
-                    }}
-                    role="option"
-                    type="button"
-                  >
-                    <span className="min-w-0 truncate">{set.name}</span>
-                    <span className="shrink-0 text-xs font-medium text-muted-foreground">
-                      {set.code.toUpperCase()}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
             <Button
               aria-label="Search"
               className="absolute right-1 top-1/2 h-9 w-9 -translate-y-1/2"
@@ -245,6 +290,7 @@ export function SetSearch() {
               activeRarities={activeRarities}
               cards={cards}
               isLoading={cardsLoading}
+              isLoadingMore={loadingMore}
               onColorToggle={toggleColor}
               onFilterToggle={toggleFrameFilter}
               onPriceToggle={togglePrice}
@@ -320,6 +366,7 @@ function SetCards({
   activeRarities,
   cards,
   isLoading,
+  isLoadingMore,
   onColorToggle,
   onFilterToggle,
   onPriceToggle,
@@ -332,6 +379,7 @@ function SetCards({
   activeRarities: RarityFilter[];
   cards: CardSearchResult[];
   isLoading: boolean;
+  isLoadingMore: boolean;
   onColorToggle: (color: ColorFilter) => void;
   onFilterToggle: (filter: SetSearchFilter) => void;
   onPriceToggle: (price: PriceFilter) => void;
@@ -348,7 +396,7 @@ function SetCards({
     <>
       {cardGroups.length > 1 && <SetTableOfContents groups={cardGroups} />}
       <CheckboxFilterGroup
-        disabled={isLoading}
+        disabled={isLoading || isLoadingMore}
         label="Frame"
         onToggle={onFilterToggle}
         options={SET_CARD_FILTERS}
@@ -401,17 +449,22 @@ function SetCards({
                   </div>
                   <div className="h-px flex-1 bg-border" />
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                  {group.cards.map((card) => (
-                    <CardTile card={card} key={card.id} />
-                  ))}
-                </div>
+                <VirtualizedCardGrid
+                  getKey={(card) => card.id}
+                  items={group.cards}
+                  renderItem={(card) => <CardTile card={card} />}
+                />
               </div>
             ))}
+            {isLoadingMore ? (
+              <div aria-live="polite" className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
+                Loading more cards…
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground">
-            No cards matched this filter.
+            {isLoadingMore ? "Loading cards…" : "No cards matched this filter."}
           </div>
         )}
       </FilteredResultsLayout>

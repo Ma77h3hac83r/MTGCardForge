@@ -1,5 +1,7 @@
-import { getSafeScryfallApiUrl, normalizeScryfallCards, type CardSearchResult, type ScryfallCard } from "@/lib/scryfall";
-import { getScryfallApiFetchUrl } from "@/lib/apiProxy";
+import { scryfallFetch } from "@/lib/apiProxy";
+import { CATALOG_CACHE_KEYS, getCachedValue, setCachedValue } from "@/lib/catalogCache";
+import { normalizeScryfallCards, type CardSearchResult } from "@/lib/scryfall";
+import { fetchAllScryfallCardPages, fetchScryfallCardPage, waitForScryfall } from "@/lib/scryfallPages";
 
 export type SetSearchFilter =
   | "all"
@@ -32,6 +34,13 @@ export type SetSearchResult = {
   query: string;
 };
 
+export type ProgressiveSetCardsPage = {
+  cards: CardSearchResult[];
+  nextPage: string | null;
+  query: string;
+  hasMore: boolean;
+};
+
 type ScryfallList<T> = {
   data?: T[];
   has_more?: boolean;
@@ -51,13 +60,57 @@ export const SET_CARD_FILTERS: Array<{ label: string; value: SetSearchFilter; sy
   { label: "Token", value: "token", syntax: "is:token" },
 ];
 
+let setsPromise: Promise<ScryfallSet[]> | null = null;
+
+/** Test helper: clears in-flight / memoized sets fetch state. */
+export function resetSetsCatalogStateForTests() {
+  setsPromise = null;
+}
+
 export async function fetchAllSets(signal?: AbortSignal) {
-  const response = await fetch(getScryfallApiFetchUrl("https://api.scryfall.com/sets"), {
-    signal,
-    headers: {
-      Accept: "application/json",
-    },
-  });
+  const cachedSets = getCachedValue<ScryfallSet[]>(CATALOG_CACHE_KEYS.sets);
+
+  if (cachedSets?.length) {
+    return cachedSets;
+  }
+
+  if (!setsPromise) {
+    setsPromise = fetchAllSetsFromNetwork()
+      .then((sets) => {
+        if (sets.length) {
+          setCachedValue(CATALOG_CACHE_KEYS.sets, sets);
+        }
+
+        return sets;
+      })
+      .catch((error) => {
+        setsPromise = null;
+        throw error;
+      });
+  }
+
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+
+  if (!signal) {
+    return setsPromise;
+  }
+
+  return Promise.race([
+    setsPromise,
+    new Promise<ScryfallSet[]>((_, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => reject(new DOMException("Aborted", "AbortError")),
+        { once: true },
+      );
+    }),
+  ]);
+}
+
+async function fetchAllSetsFromNetwork() {
+  const response = await scryfallFetch("https://api.scryfall.com/sets");
 
   if (!response.ok) {
     throw new Error("Unable to load Scryfall sets.");
@@ -147,18 +200,78 @@ function getSetCodeFromSuggestionLabel(normalizedQuery: string) {
   return match?.[1] ?? null;
 }
 
+export function buildSetCardsSearchUrl(relatedSets: ScryfallSet[], filters: SetSearchFilter | SetSearchFilter[]) {
+  const query = buildSetCardsQuery(relatedSets, filters);
+  return {
+    query,
+    url: `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints&order=set`,
+  };
+}
+
+export async function fetchSetCardsPage(
+  relatedSets: ScryfallSet[],
+  filters: SetSearchFilter | SetSearchFilter[],
+  signal?: AbortSignal,
+  pageUrl?: string | null,
+): Promise<ProgressiveSetCardsPage> {
+  const { query, url } = buildSetCardsSearchUrl(relatedSets, filters);
+  const page = await fetchScryfallCardPage(pageUrl ?? url, signal, {
+    errorMessage: "Unable to load cards for this set.",
+  });
+
+  return {
+    cards: sortCardsByRelatedSetOrder(normalizeScryfallCards(page.cards), relatedSets),
+    nextPage: page.nextPage,
+    query,
+    hasMore: Boolean(page.nextPage),
+  };
+}
+
 export async function fetchSetCards(
   relatedSets: ScryfallSet[],
   filters: SetSearchFilter | SetSearchFilter[],
   signal?: AbortSignal,
 ) {
-  const query = buildSetCardsQuery(relatedSets, filters);
-  const cards = await fetchAllCardPages(
-    `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints&order=set`,
-    signal,
-  );
+  const { query, url } = buildSetCardsSearchUrl(relatedSets, filters);
+  const cards = await fetchAllScryfallCardPages(url, signal, {
+    errorMessage: "Unable to load cards for this set.",
+  });
 
   return { cards: sortCardsByRelatedSetOrder(normalizeScryfallCards(cards), relatedSets), query };
+}
+
+/** Streams set cards page-by-page so the UI can render after the first response. */
+export async function streamSetCards(
+  relatedSets: ScryfallSet[],
+  filters: SetSearchFilter | SetSearchFilter[],
+  onPage: (update: { cards: CardSearchResult[]; query: string; done: boolean }) => void,
+  signal?: AbortSignal,
+) {
+  const { query, url } = buildSetCardsSearchUrl(relatedSets, filters);
+  let nextUrl: string | null = url;
+  let accumulated: CardSearchResult[] = [];
+  let isFirstPage = true;
+
+  while (nextUrl) {
+    if (!isFirstPage) {
+      await waitForScryfall(signal);
+    }
+
+    const page = await fetchScryfallCardPage(nextUrl, signal, {
+      errorMessage: "Unable to load cards for this set.",
+    });
+    accumulated = sortCardsByRelatedSetOrder(
+      [...accumulated, ...normalizeScryfallCards(page.cards)],
+      relatedSets,
+    );
+    nextUrl = page.nextPage;
+    onPage({ cards: accumulated, query, done: !nextUrl });
+    isFirstPage = false;
+  }
+
+  if (isFirstPage) {
+    onPage({ cards: [], query, done: true });
+  }
 }
 
 export function buildSetCardsQuery(relatedSets: ScryfallSet[], filters: SetSearchFilter | SetSearchFilter[]) {
@@ -184,34 +297,8 @@ function buildFilterSyntax(filters: SetSearchFilter | SetSearchFilter[]) {
   return syntaxes.length === 1 ? syntaxes[0] : `(${syntaxes.join(" OR ")})`;
 }
 
-async function fetchAllCardPages(url: string, signal?: AbortSignal) {
-  const cards: ScryfallCard[] = [];
-  let nextUrl: string | undefined = url;
-
-  while (nextUrl) {
-    const safeNextUrl = getSafeScryfallApiUrl(nextUrl);
-
-    if (!safeNextUrl) {
-      throw new Error("Scryfall returned an unexpected pagination URL.");
-    }
-
-    const response = await fetch(getScryfallApiFetchUrl(safeNextUrl), {
-      signal,
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error("Unable to load cards for this set.");
-    }
-
-    const payload = (await response.json()) as ScryfallList<ScryfallCard>;
-    cards.push(...(payload.data ?? []));
-    nextUrl = payload.has_more ? payload.next_page : undefined;
-  }
-
-  return cards;
+export function mergeSetCardPages(existing: CardSearchResult[], pageCards: CardSearchResult[], relatedSets: ScryfallSet[]) {
+  return sortCardsByRelatedSetOrder([...existing, ...pageCards], relatedSets);
 }
 
 function getSetSuggestionRank(set: ScryfallSet, normalizedQuery: string) {

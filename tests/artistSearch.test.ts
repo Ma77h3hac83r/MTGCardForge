@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildArtistSearchUrl, fetchArtistCards, getArtistStats } from "@/lib/artistSearch";
+import { buildArtistSearchUrl, fetchArtistCards, getArtistStats, streamArtistCards } from "@/lib/artistSearch";
 
 function response(status: number, payload: unknown) {
   return {
@@ -72,6 +72,56 @@ describe("artistSearch", () => {
       setCount: 2,
       colorCount: 3,
     });
+  });
+
+  it("streams artist cards page by page", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, {
+          object: "list",
+          has_more: true,
+          next_page: "https://api.scryfall.com/cards/search?page=2",
+          data: [
+            {
+              id: "first",
+              name: "First Card",
+              set: "tst",
+              set_name: "Test",
+              collector_number: "1",
+              prices: {},
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        response(200, {
+          object: "list",
+          has_more: false,
+          data: [
+            {
+              id: "second",
+              name: "Second Card",
+              set: "tst",
+              set_name: "Test",
+              collector_number: "2",
+              prices: {},
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pages: Array<{ names: string[]; done: boolean }> = [];
+    await streamArtistCards("Test Artist", "all", (update) => {
+      pages.push({ names: update.cards.map((entry) => entry.name), done: update.done });
+    });
+
+    expect(pages).toEqual([
+      { names: ["First Card"], done: false },
+      { names: ["First Card", "Second Card"], done: true },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -1,13 +1,15 @@
 import { Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { AdvancedCardFilterSections, CheckboxFilterGroup, FilteredResultsLayout } from "@/components/CardFilters";
 import { CardTile } from "@/components/CardDisplay";
 import { ManaLoading } from "@/components/ManaLoading";
+import { SearchCombobox } from "@/components/SearchCombobox";
 import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
+import { VirtualizedCardGrid } from "@/components/VirtualizedCardGrid";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { useDebouncedAsync } from "@/hooks/useDebouncedAsync";
 import { fetchArtistNameSuggestions } from "@/lib/autocomplete";
 import {
   filterCardsByAdvancedFilters,
@@ -18,7 +20,7 @@ import {
 } from "@/lib/cardFilters";
 import {
   ARTIST_FRAME_FILTERS,
-  fetchArtistCards,
+  streamArtistCards,
   type ArtistFrameFilter,
 } from "@/lib/artistSearch";
 import type { CardSearchResult } from "@/lib/scryfall";
@@ -35,9 +37,12 @@ export function ArtistSearch() {
   const [activeColors, setActiveColors] = useState<ColorFilter[]>([]);
   const [activePrices, setActivePrices] = useState<PriceFilter[]>([]);
   const [cardsLoading, setCardsLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const searchControllerRef = useRef<AbortController | null>(null);
+  const cardsControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -49,41 +54,36 @@ export function ArtistSearch() {
     }
   }, []);
 
-  useEffect(() => {
-    const trimmedQuery = query.trim();
+  const trimmedQuery = query.trim();
+  const suggestionsEnabled = trimmedQuery.length >= 2 && state !== "loading";
 
-    if (trimmedQuery.length < 2 || state === "loading") {
+  useEffect(() => {
+    if (!suggestionsEnabled) {
       setSuggestions([]);
       setSuggestionsOpen(false);
-      return;
     }
+  }, [suggestionsEnabled]);
 
-    const controller = new AbortController();
-    const timeout = window.setTimeout(async () => {
-      try {
-        const sortedSuggestions = await fetchArtistNameSuggestions(trimmedQuery, controller.signal);
-        setSuggestions(sortedSuggestions);
-        setSuggestionsOpen(sortedSuggestions.length > 0);
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return;
-        }
-
-        setSuggestions([]);
-        setSuggestionsOpen(false);
-      }
-    }, 250);
-
-    return () => {
-      controller.abort();
-      window.clearTimeout(timeout);
-    };
-  }, [query, state]);
+  useDebouncedAsync(
+    suggestionsEnabled,
+    [trimmedQuery],
+    (signal) => fetchArtistNameSuggestions(trimmedQuery, signal),
+    (sortedSuggestions) => {
+      setSuggestions(sortedSuggestions);
+      setSuggestionsOpen(sortedSuggestions.length > 0);
+    },
+    () => {
+      setSuggestions([]);
+      setSuggestionsOpen(false);
+    },
+  );
 
   async function searchArtist(nextQuery = query, options: { updateUrl?: boolean } = {}) {
     const trimmedQuery = nextQuery.trim();
 
     if (!trimmedQuery) {
+      searchControllerRef.current?.abort();
+      cardsControllerRef.current?.abort();
       setState("idle");
       setArtistName("");
       setCards([]);
@@ -92,6 +92,7 @@ export function ArtistSearch() {
       setActiveColors([]);
       setActivePrices([]);
       setCardsLoading(false);
+      setLoadingMore(false);
       setSuggestions([]);
       setSuggestionsOpen(false);
       setMessage("");
@@ -99,6 +100,9 @@ export function ArtistSearch() {
     }
 
     const controller = new AbortController();
+    searchControllerRef.current?.abort();
+    cardsControllerRef.current?.abort();
+    searchControllerRef.current = controller;
     setState("loading");
     setArtistName(trimmedQuery);
     setCards([]);
@@ -107,6 +111,7 @@ export function ArtistSearch() {
     setActiveColors([]);
     setActivePrices([]);
     setCardsLoading(false);
+    setLoadingMore(false);
     setSuggestions([]);
     setSuggestionsOpen(false);
     setMessage("");
@@ -117,18 +122,55 @@ export function ArtistSearch() {
       window.history.replaceState(null, "", url);
     }
 
+    let latestCards: CardSearchResult[] = [];
+
     try {
-      const artistCards = await fetchArtistCards(trimmedQuery, controller.signal, "all");
-      setCards(artistCards);
-      setState(artistCards.length ? "results" : "empty");
-      setMessage(artistCards.length ? "" : `No paper cards found for artist "${trimmedQuery}".`);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      await streamArtistCards(
+        trimmedQuery,
+        "all",
+        (update) => {
+          if (searchControllerRef.current !== controller) {
+            return;
+          }
+
+          latestCards = update.cards;
+          setCards(update.cards);
+          setLoadingMore(!update.done);
+
+          if (update.cards.length) {
+            setState("results");
+            setMessage("");
+          } else if (update.done) {
+            setState("empty");
+            setMessage(`No paper cards found for artist "${trimmedQuery}".`);
+          }
+        },
+        controller.signal,
+      );
+
+      if (searchControllerRef.current !== controller) {
         return;
       }
 
-      setState("error");
-      setMessage(error instanceof Error ? error.message : "Unable to search artists.");
+      if (!latestCards.length) {
+        setState("empty");
+        setMessage(`No paper cards found for artist "${trimmedQuery}".`);
+      }
+    } catch (error) {
+      if (searchControllerRef.current !== controller || (error instanceof DOMException && error.name === "AbortError")) {
+        return;
+      }
+
+      setLoadingMore(false);
+      if (!latestCards.length) {
+        setState("error");
+        setMessage(error instanceof Error ? error.message : "Unable to search artists.");
+      }
+    } finally {
+      if (searchControllerRef.current === controller) {
+        setLoadingMore(false);
+        searchControllerRef.current = null;
+      }
     }
   }
 
@@ -138,21 +180,40 @@ export function ArtistSearch() {
     }
 
     const controller = new AbortController();
+    cardsControllerRef.current?.abort();
+    cardsControllerRef.current = controller;
     setActiveFrameFilters(nextFilters);
     setCards([]);
     setCardsLoading(true);
+    setLoadingMore(false);
 
     try {
-      const artistCards = await fetchArtistCards(artistName, controller.signal, nextFilters);
-      setCards(artistCards);
+      await streamArtistCards(
+        artistName,
+        nextFilters,
+        (update) => {
+          if (cardsControllerRef.current !== controller) {
+            return;
+          }
+
+          setCards(update.cards);
+          setCardsLoading(false);
+          setLoadingMore(!update.done);
+        },
+        controller.signal,
+      );
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (cardsControllerRef.current !== controller || (error instanceof DOMException && error.name === "AbortError")) {
         return;
       }
 
-      setCards([]);
+      setCards((currentCards) => (currentCards.length ? currentCards : []));
     } finally {
-      setCardsLoading(false);
+      if (cardsControllerRef.current === controller) {
+        setCardsLoading(false);
+        setLoadingMore(false);
+        cardsControllerRef.current = null;
+      }
     }
   }
 
@@ -185,55 +246,22 @@ export function ArtistSearch() {
             }}
             role="search"
           >
-            <label className="sr-only" htmlFor="artist-search">
-              Search by artist name
-            </label>
-            <Input
+            <SearchCombobox
               id="artist-search"
-              aria-autocomplete="list"
-              aria-controls="artist-search-suggestions"
-              aria-expanded={suggestionsOpen}
-              autoComplete="off"
-              className="pr-12"
+              label="Search by artist name"
+              open={suggestionsOpen}
+              options={suggestions}
               placeholder="Artist name"
-              role="combobox"
               value={query}
-              onBlur={() => {
-                window.setTimeout(() => setSuggestionsOpen(false), 120);
-              }}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setSuggestionsOpen(true);
-              }}
-              onFocus={() => {
-                if (suggestions.length) {
-                  setSuggestionsOpen(true);
-                }
+              getOptionKey={(suggestion) => suggestion}
+              getOptionLabel={(suggestion) => suggestion}
+              onChange={setQuery}
+              onOpenChange={setSuggestionsOpen}
+              onSelect={(suggestion) => {
+                setQuery(suggestion);
+                void searchArtist(suggestion);
               }}
             />
-            {suggestionsOpen && (
-              <div
-                className="absolute left-0 right-0 top-12 z-30 overflow-hidden rounded-lg border bg-card shadow-lg"
-                id="artist-search-suggestions"
-                role="listbox"
-              >
-                {suggestions.map((suggestion) => (
-                  <button
-                    className="block w-full px-3 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
-                    key={suggestion}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      setQuery(suggestion);
-                      void searchArtist(suggestion);
-                    }}
-                    role="option"
-                    type="button"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            )}
             <Button
               aria-label="Search"
               className="absolute right-1 top-1/2 h-9 w-9 -translate-y-1/2"
@@ -253,7 +281,11 @@ export function ArtistSearch() {
 
         {state === "results" && (
           <>
-            <ArtistStats artistName={artistName} cardCount={cards.length} />
+            <ArtistStats
+              artistName={artistName}
+              cardCount={cards.length}
+              isLoadingMore={loadingMore}
+            />
             <ArtistCards
               activeColors={activeColors}
               activeFrameFilters={activeFrameFilters}
@@ -261,6 +293,7 @@ export function ArtistSearch() {
               activeRarities={activeRarities}
               cards={cards}
               isLoading={cardsLoading}
+              isLoadingMore={loadingMore}
               onColorToggle={toggleColor}
               onFrameToggle={toggleFrameFilter}
               onPriceToggle={togglePrice}
@@ -307,12 +340,23 @@ function ArtistStatus({ state, message }: { state: SearchState; message: string 
   return null;
 }
 
-function ArtistStats({ artistName, cardCount }: { artistName: string; cardCount: number }) {
+function ArtistStats({
+  artistName,
+  cardCount,
+  isLoadingMore,
+}: {
+  artistName: string;
+  cardCount: number;
+  isLoadingMore: boolean;
+}) {
   return (
     <Card>
       <CardHeader>
         <CardTitle aria-label={artistName} className="text-2xl">
-          {artistName} <span className="text-base font-medium text-muted-foreground">({cardCount} cards)</span>
+          {artistName}{" "}
+          <span className="text-base font-medium text-muted-foreground">
+            ({cardCount} cards{isLoadingMore ? " and counting…" : ""})
+          </span>
         </CardTitle>
       </CardHeader>
     </Card>
@@ -326,6 +370,7 @@ function ArtistCards({
   activeRarities,
   cards,
   isLoading,
+  isLoadingMore,
   onColorToggle,
   onFrameToggle,
   onPriceToggle,
@@ -337,6 +382,7 @@ function ArtistCards({
   activeRarities: RarityFilter[];
   cards: CardSearchResult[];
   isLoading: boolean;
+  isLoadingMore: boolean;
   onColorToggle: (color: ColorFilter) => void;
   onFrameToggle: (filter: ArtistFrameFilter) => void;
   onPriceToggle: (price: PriceFilter) => void;
@@ -350,7 +396,7 @@ function ArtistCards({
   const filterPanel = (
     <>
       <CheckboxFilterGroup
-        disabled={isLoading}
+        disabled={isLoading || isLoadingMore}
         label="Frame"
         onToggle={onFrameToggle}
         options={ARTIST_FRAME_FILTERS}
@@ -383,14 +429,22 @@ function ArtistCards({
             </div>
           </div>
         ) : filteredCards.length ? (
-          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {filteredCards.map((card) => (
-              <CardTile card={card} key={card.id} showManaCost showName showType />
-            ))}
+          <div className="space-y-4">
+            <VirtualizedCardGrid
+              estimateRowHeight={400}
+              getKey={(card) => card.id}
+              items={filteredCards}
+              renderItem={(card) => <CardTile card={card} showManaCost showName showType />}
+            />
+            {isLoadingMore ? (
+              <div aria-live="polite" className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
+                Loading more cards…
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="rounded-lg border bg-card p-5 text-sm text-muted-foreground">
-            No cards matched this filter.
+            {isLoadingMore ? "Loading cards…" : "No cards matched this filter."}
           </div>
         )}
       </FilteredResultsLayout>

@@ -28,42 +28,43 @@ describe("DeckBuilder", () => {
   });
 
   it("loads a pasted deck list and groups cards by type", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        response(404, {
-          object: "error",
-        }),
-      )
-      .mockResolvedValueOnce(
-        response(200, {
-          object: "list",
-          data: [
-            {
-              id: "sol-ring",
-              name: "Sol Ring",
-              set: "cmm",
-              set_name: "Commander Masters",
-              collector_number: "400",
-              type_line: "Artifact",
-              mana_cost: "{1}",
-              prices: { usd: "0.99" },
-              image_uris: { normal: "https://cards.scryfall.io/sol-ring.jpg" },
-            },
-            {
-              id: "island",
-              name: "Island",
-              set: "one",
-              set_name: "Phyrexia: All Will Be One",
-              collector_number: "267",
-              type_line: "Basic Land - Island",
-              mana_cost: "",
-              prices: { usd: "0.05" },
-              image_uris: { normal: "https://cards.scryfall.io/island.jpg" },
-            },
-          ],
-        }),
-      );
+    const collectionCards = [
+      {
+        id: "sol-ring",
+        name: "Sol Ring",
+        set: "cmm",
+        set_name: "Commander Masters",
+        collector_number: "400",
+        type_line: "Artifact",
+        mana_cost: "{1}",
+        prices: { usd: "0.99" },
+        image_uris: { normal: "https://cards.scryfall.io/sol-ring.jpg" },
+      },
+      {
+        id: "island",
+        name: "Island",
+        set: "one",
+        set_name: "Phyrexia: All Will Be One",
+        collector_number: "267",
+        type_line: "Basic Land - Island",
+        mana_cost: "",
+        prices: { usd: "0.05" },
+        image_uris: { normal: "https://cards.scryfall.io/island.jpg" },
+      },
+    ];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes("/cards/collection") || init?.method === "POST") {
+        return Promise.resolve(response(200, { data: collectionCards }));
+      }
+
+      if (url.includes("/cards/search")) {
+        return Promise.resolve(response(200, { object: "list", data: collectionCards }));
+      }
+
+      return Promise.resolve(response(404, { object: "error" }));
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<DeckBuilder />);
@@ -73,7 +74,7 @@ describe("DeckBuilder", () => {
     fireEvent.click(screen.getByRole("button", { name: /load deck/i }));
 
     expect(await screen.findByRole("heading", { name: /card type breakdown/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /load new deck/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /load new deck/i })).toBeInTheDocument();
     expect(screen.queryByLabelText(/deck input/i)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /artifact\s*1/i })).toHaveAttribute("href", "#deck-section-artifact");
     expect(screen.getByRole("link", { name: /basic land\s*2/i })).toHaveAttribute("href", "#deck-section-basic-land");
@@ -88,70 +89,84 @@ describe("DeckBuilder", () => {
     expect(screen.queryByText("{1}")).not.toBeInTheDocument();
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/cards/collection"))).toBe(true);
+      expect(
+        fetchMock.mock.calls.some((call) => {
+          try {
+            return new URL(String(call[0])).searchParams.get("order") === "usd";
+          } catch {
+            return false;
+          }
+        }),
+      ).toBe(true);
     });
-    expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("order")).toBe("usd");
-    expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("q")).toBe(
-      '(!"Sol Ring" or !"Island") game:paper usd>=0',
-    );
   });
 
   it("adds produced tokens after the basic land section", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        response(200, {
-          object: "list",
-          data: [
-            {
-              id: "bird-maker",
-              name: "Bird Maker",
-              set: "tst",
-              set_name: "Test",
-              collector_number: "1",
-              type_line: "Creature",
-              prices: { usd: "0.50" },
-              image_uris: { normal: "https://cards.scryfall.io/bird-maker.jpg" },
-              all_parts: [
-                {
-                  id: "bird-token",
-                  component: "token",
-                  name: "Bird",
-                  type_line: "Token Creature - Bird",
-                  uri: "https://api.scryfall.com/cards/bird-token",
-                },
-              ],
-            },
-            {
-              id: "island",
-              name: "Island",
-              set: "one",
-              set_name: "Phyrexia: All Will Be One",
-              collector_number: "267",
-              type_line: "Basic Land - Island",
-              prices: { usd: "0.05" },
-              image_uris: { normal: "https://cards.scryfall.io/island.jpg" },
-            },
-          ],
-        }),
-      )
-      .mockResolvedValueOnce(
-        response(200, {
-          id: "bird-token",
-          layout: "token",
-          name: "Bird",
-          set: "tst",
-          set_name: "Test Tokens",
-          collector_number: "1",
-          type_line: "Token Creature - Bird",
-          power: "1",
-          toughness: "1",
-          colors: ["W"],
-          prices: {},
-          image_uris: { normal: "https://cards.scryfall.io/bird-token.jpg" },
-          scryfall_uri: "https://scryfall.com/card/tst/1/bird",
-        }),
-      );
+    const deckCards = [
+      {
+        id: "bird-maker",
+        name: "Bird Maker",
+        set: "tst",
+        set_name: "Test",
+        collector_number: "1",
+        type_line: "Creature",
+        prices: { usd: "0.50" },
+        image_uris: { normal: "https://cards.scryfall.io/bird-maker.jpg" },
+        all_parts: [
+          {
+            id: "bird-token",
+            component: "token",
+            name: "Bird",
+            type_line: "Token Creature - Bird",
+            uri: "https://api.scryfall.com/cards/bird-token",
+          },
+        ],
+      },
+      {
+        id: "island",
+        name: "Island",
+        set: "one",
+        set_name: "Phyrexia: All Will Be One",
+        collector_number: "267",
+        type_line: "Basic Land - Island",
+        prices: { usd: "0.05" },
+        image_uris: { normal: "https://cards.scryfall.io/island.jpg" },
+      },
+    ];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes("/cards/collection") || init?.method === "POST") {
+        return Promise.resolve(response(200, { data: deckCards }));
+      }
+
+      if (url.includes("/cards/search")) {
+        return Promise.resolve(response(200, { object: "list", data: deckCards }));
+      }
+
+      if (url === "https://api.scryfall.com/cards/bird-token") {
+        return Promise.resolve(
+          response(200, {
+            id: "bird-token",
+            layout: "token",
+            name: "Bird",
+            set: "tst",
+            set_name: "Test Tokens",
+            collector_number: "1",
+            type_line: "Token Creature - Bird",
+            power: "1",
+            toughness: "1",
+            colors: ["W"],
+            prices: {},
+            image_uris: { normal: "https://cards.scryfall.io/bird-token.jpg" },
+            scryfall_uri: "https://scryfall.com/card/tst/1/bird",
+          }),
+        );
+      }
+
+      return Promise.resolve(response(404, { object: "error" }));
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<DeckBuilder />);
@@ -170,8 +185,9 @@ describe("DeckBuilder", () => {
     expect(pageText.indexOf("Tokens (1)")).toBeGreaterThan(pageText.indexOf("Basic Land (1)"));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls.some((call) => String(call[0]) === "https://api.scryfall.com/cards/bird-token")).toBe(
+        true,
+      );
     });
-    expect(fetchMock.mock.calls[1][0]).toBe("https://api.scryfall.com/cards/bird-token");
   });
 });

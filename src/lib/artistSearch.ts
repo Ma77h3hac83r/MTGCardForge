@@ -1,13 +1,13 @@
-import { getSafeScryfallApiUrl, normalizeScryfallCards, type CardSearchResult, type ScryfallCard } from "@/lib/scryfall";
-import { getScryfallApiFetchUrl } from "@/lib/apiProxy";
-
-type ScryfallList<T> = {
-  data?: T[];
-  has_more?: boolean;
-  next_page?: string;
-};
+import { normalizeScryfallCards, type CardSearchResult } from "@/lib/scryfall";
+import { fetchAllScryfallCardPages, fetchScryfallCardPage, waitForScryfall } from "@/lib/scryfallPages";
 
 export type ArtistFrameFilter = "all" | "default" | "full" | "extended" | "showcase" | "etched" | "halo" | "retro";
+
+export type ProgressiveArtistCardsPage = {
+  cards: CardSearchResult[];
+  nextPage: string | null;
+  hasMore: boolean;
+};
 
 export const ARTIST_FRAME_FILTERS: Array<{ label: string; value: ArtistFrameFilter; syntax: string | null }> = [
   { label: "All", value: "all", syntax: null },
@@ -20,13 +20,68 @@ export const ARTIST_FRAME_FILTERS: Array<{ label: string; value: ArtistFrameFilt
   { label: "Retro", value: "retro", syntax: "is:retro" },
 ];
 
+export async function fetchArtistCardsPage(
+  artistName: string,
+  signal?: AbortSignal,
+  filters: ArtistFrameFilter | ArtistFrameFilter[] = "all",
+  pageUrl?: string | null,
+): Promise<ProgressiveArtistCardsPage> {
+  const page = await fetchScryfallCardPage(pageUrl ?? buildArtistSearchUrl(artistName, filters), signal, {
+    emptyOn404: true,
+    errorMessage: "Unable to load cards for this artist.",
+    rateLimitMessage: "Scryfall is rate limiting requests. Wait a moment and search again.",
+  });
+
+  return {
+    cards: normalizeScryfallCards(page.cards),
+    nextPage: page.nextPage,
+    hasMore: Boolean(page.nextPage),
+  };
+}
+
 export async function fetchArtistCards(
   artistName: string,
   signal?: AbortSignal,
   filters: ArtistFrameFilter | ArtistFrameFilter[] = "all",
 ) {
-  const cards = await fetchAllArtistPages(buildArtistSearchUrl(artistName, filters), signal);
+  const cards = await fetchAllScryfallCardPages(buildArtistSearchUrl(artistName, filters), signal, {
+    emptyOn404: true,
+    errorMessage: "Unable to load cards for this artist.",
+    rateLimitMessage: "Scryfall is rate limiting requests. Wait a moment and search again.",
+  });
   return normalizeScryfallCards(cards);
+}
+
+/** Streams artist cards page-by-page so the UI can render after the first response. */
+export async function streamArtistCards(
+  artistName: string,
+  filters: ArtistFrameFilter | ArtistFrameFilter[],
+  onPage: (update: { cards: CardSearchResult[]; done: boolean }) => void,
+  signal?: AbortSignal,
+) {
+  let nextUrl: string | null = buildArtistSearchUrl(artistName, filters);
+  let accumulated: CardSearchResult[] = [];
+  let isFirstPage = true;
+
+  while (nextUrl) {
+    if (!isFirstPage) {
+      await waitForScryfall(signal);
+    }
+
+    const page = await fetchScryfallCardPage(nextUrl, signal, {
+      emptyOn404: true,
+      errorMessage: "Unable to load cards for this artist.",
+      rateLimitMessage: "Scryfall is rate limiting requests. Wait a moment and search again.",
+    });
+    accumulated = [...accumulated, ...normalizeScryfallCards(page.cards)];
+    nextUrl = page.nextPage;
+    onPage({ cards: accumulated, done: !nextUrl });
+    isFirstPage = false;
+  }
+
+  if (isFirstPage) {
+    onPage({ cards: [], done: true });
+  }
 }
 
 export function buildArtistSearchUrl(
@@ -71,42 +126,4 @@ function buildFilterSyntax(filters: ArtistFrameFilter | ArtistFrameFilter[]) {
   }
 
   return syntaxes.length === 1 ? syntaxes[0] : `(${syntaxes.join(" OR ")})`;
-}
-
-async function fetchAllArtistPages(url: string, signal?: AbortSignal) {
-  const cards: ScryfallCard[] = [];
-  let nextUrl: string | undefined = url;
-
-  while (nextUrl) {
-    const safeNextUrl = getSafeScryfallApiUrl(nextUrl);
-
-    if (!safeNextUrl) {
-      throw new Error("Scryfall returned an unexpected pagination URL.");
-    }
-
-    const response = await fetch(getScryfallApiFetchUrl(safeNextUrl), {
-      signal,
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    if (response.status === 404) {
-      return [];
-    }
-
-    if (response.status === 429) {
-      throw new Error("Scryfall is rate limiting requests. Wait a moment and search again.");
-    }
-
-    if (!response.ok) {
-      throw new Error("Unable to load cards for this artist.");
-    }
-
-    const payload = (await response.json()) as ScryfallList<ScryfallCard>;
-    cards.push(...(payload.data ?? []));
-    nextUrl = payload.has_more ? payload.next_page : undefined;
-  }
-
-  return cards;
 }

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import logoUrl from "@/images/logo.png";
 import { NAV_ITEMS } from "@/lib/navigation";
 
@@ -11,6 +12,8 @@ export function AppNav({ children, layout = "center" }: AppNavProps) {
   const isSplit = layout === "split";
 
   return (
+    <>
+    <ServiceWorkerRegister />
     <nav className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur">
       <div
         className={
@@ -51,5 +54,6 @@ export function AppNav({ children, layout = "center" }: AppNavProps) {
         </div>
       </div>
     </nav>
+    </>
   );
 }

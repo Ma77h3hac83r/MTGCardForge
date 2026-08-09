@@ -1,12 +1,20 @@
 import { ClipboardList } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { CardTile } from "@/components/CardDisplay";
 import { ManaLoading } from "@/components/ManaLoading";
 import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
+import { VirtualizedCardGrid } from "@/components/VirtualizedCardGrid";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DECK_GROUPS, groupDeckCards, parseDeckInput, resolveDeckCards, type DeckResolvedCard } from "@/lib/deckSearch";
+import {
+  DECK_GROUPS,
+  groupDeckCards,
+  parseDeckInput,
+  streamResolveDeckCards,
+  type DeckResolveProgress,
+  type DeckResolvedCard,
+} from "@/lib/deckSearch";
 import type { CardSearchResult } from "@/lib/scryfall";
 import { fetchTokensAndEmblemsForCards } from "@/lib/tokenSearch";
 
@@ -18,26 +26,40 @@ export function DeckBuilder() {
   const [cards, setCards] = useState<DeckResolvedCard[]>([]);
   const [tokens, setTokens] = useState<CardSearchResult[]>([]);
   const [message, setMessage] = useState("");
+  const [progress, setProgress] = useState<Pick<DeckResolveProgress, "resolvedCount" | "totalCount" | "phase"> | null>(
+    null,
+  );
+  const loadControllerRef = useRef<AbortController | null>(null);
 
   async function loadDeck() {
     const trimmedInput = input.trim();
 
     if (!trimmedInput) {
+      loadControllerRef.current?.abort();
+      loadControllerRef.current = null;
       setState("idle");
       setCards([]);
       setTokens([]);
       setMessage("");
+      setProgress(null);
       return;
     }
 
     const controller = new AbortController();
+    loadControllerRef.current?.abort();
+    loadControllerRef.current = controller;
     setState("loading");
     setCards([]);
     setTokens([]);
     setMessage("");
+    setProgress(null);
 
     try {
       const parsedCards = await parseDeckInput(trimmedInput, controller.signal);
+
+      if (loadControllerRef.current !== controller) {
+        return;
+      }
 
       if (!parsedCards.length) {
         setState("empty");
@@ -45,31 +67,89 @@ export function DeckBuilder() {
         return;
       }
 
-      const resolvedCards = await resolveDeckCards(parsedCards, controller.signal);
-      const resolvedCardData = resolvedCards
-        .map((card) => card.card)
-        .filter((card): card is CardSearchResult => Boolean(card));
-      const tokenCards = await fetchTokensAndEmblemsForCards(resolvedCardData, controller.signal);
-      setCards(resolvedCards);
-      setTokens(tokenCards);
-      setState("results");
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      setProgress({ resolvedCount: 0, totalCount: parsedCards.length, phase: "collection" });
+
+      let latestCards: DeckResolvedCard[] = parsedCards.map((card) => ({ ...card, card: null }));
+
+      await streamResolveDeckCards(
+        parsedCards,
+        (update) => {
+          if (loadControllerRef.current !== controller) {
+            return;
+          }
+
+          latestCards = update.cards;
+          setCards(update.cards);
+          setProgress({
+            resolvedCount: update.resolvedCount,
+            totalCount: update.totalCount,
+            phase: update.phase,
+          });
+
+          if (update.resolvedCount > 0) {
+            setState("results");
+          }
+        },
+        controller.signal,
+      );
+
+      if (loadControllerRef.current !== controller) {
         return;
       }
 
+      const resolvedCardData = latestCards
+        .map((card) => card.card)
+        .filter((card): card is CardSearchResult => Boolean(card));
+
+      if (!resolvedCardData.length && !latestCards.length) {
+        setState("empty");
+        setMessage("No cards were found in that deck input.");
+        return;
+      }
+
+      setProgress({
+        resolvedCount: latestCards.filter((card) => Boolean(card.card)).length,
+        totalCount: latestCards.length,
+        phase: "fallback",
+      });
+
+      const tokenCards = await fetchTokensAndEmblemsForCards(resolvedCardData, controller.signal);
+
+      if (loadControllerRef.current !== controller) {
+        return;
+      }
+
+      setTokens(tokenCards);
+      setCards(latestCards);
+      setState("results");
+      setProgress(null);
+    } catch (error) {
+      if (loadControllerRef.current !== controller || (error instanceof DOMException && error.name === "AbortError")) {
+        return;
+      }
+
+      setProgress(null);
       setState("error");
       setMessage(error instanceof Error ? error.message : "Unable to load this deck.");
+    } finally {
+      if (loadControllerRef.current === controller) {
+        loadControllerRef.current = null;
+      }
     }
   }
 
   function resetDeck() {
+    loadControllerRef.current?.abort();
+    loadControllerRef.current = null;
     setInput("");
     setState("idle");
     setCards([]);
     setTokens([]);
     setMessage("");
+    setProgress(null);
   }
+
+  const isLoading = state === "loading" || Boolean(progress);
 
   return (
     <>
@@ -77,7 +157,7 @@ export function DeckBuilder() {
 
       <section className="mx-auto w-full max-w-7xl space-y-8 px-4 py-8 sm:px-6 lg:px-8" id="deck-page-top">
         <Card>
-          {state === "results" ? (
+          {state === "results" && !progress ? (
             <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
               <p className="text-sm font-medium text-muted-foreground">Deck loaded</p>
               <Button onClick={resetDeck} type="button">
@@ -107,7 +187,7 @@ export function DeckBuilder() {
                   </div>
                   <textarea
                     className="min-h-56 w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={state === "loading"}
+                    disabled={isLoading && state !== "results"}
                     id="deck-input"
                     placeholder={"1 Sol Ring\n1 Command Tower\n1 Counterspell"}
                     value={input}
@@ -115,8 +195,8 @@ export function DeckBuilder() {
                   />
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                  <Button disabled={state === "loading"} onClick={() => void loadDeck()} type="button">
-                    {state === "loading" ? "Loading" : "Load Deck"}
+                  <Button disabled={isLoading && state !== "results"} onClick={() => void loadDeck()} type="button">
+                    {state === "loading" && !cards.length ? "Loading" : state === "results" && progress ? "Updating" : "Load Deck"}
                   </Button>
                   <p className="text-sm text-muted-foreground">
                     Cards resolve to the cheapest paper printing with a Scryfall USD price when available.
@@ -127,16 +207,26 @@ export function DeckBuilder() {
           )}
         </Card>
 
-        <DeckStatus message={message} state={state} />
+        <DeckStatus message={message} progress={progress} state={state} />
 
-        {state === "results" && <DeckResults cards={cards} tokens={tokens} />}
+        {(state === "results" || (state === "loading" && cards.length > 0)) && (
+          <DeckResults cards={cards} progress={progress} tokens={tokens} />
+        )}
       </section>
     </>
   );
 }
 
-function DeckStatus({ state, message }: { state: DeckState; message: string }) {
-  if (state === "loading") {
+function DeckStatus({
+  state,
+  message,
+  progress,
+}: {
+  state: DeckState;
+  message: string;
+  progress: Pick<DeckResolveProgress, "resolvedCount" | "totalCount" | "phase"> | null;
+}) {
+  if (state === "loading" && !progress) {
     return (
       <div aria-live="polite" className="grid gap-6">
         <ManaLoading />
@@ -145,6 +235,27 @@ function DeckStatus({ state, message }: { state: DeckState; message: string }) {
           {Array.from({ length: 10 }).map((_, index) => (
             <div className="aspect-[5/7] animate-pulse rounded-lg border bg-card" key={index} />
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (progress) {
+    return (
+      <div aria-live="polite" className="rounded-lg border bg-card p-4 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span>{getProgressLabel(progress)}</span>
+          <span className="font-medium text-foreground">
+            {progress.resolvedCount} / {progress.totalCount} resolved
+          </span>
+        </div>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-300"
+            style={{
+              width: `${progress.totalCount ? Math.min(100, (progress.resolvedCount / progress.totalCount) * 100) : 0}%`,
+            }}
+          />
         </div>
       </div>
     );
@@ -161,8 +272,31 @@ function DeckStatus({ state, message }: { state: DeckState; message: string }) {
   return null;
 }
 
-function DeckResults({ cards, tokens }: { cards: DeckResolvedCard[]; tokens: CardSearchResult[] }) {
-  const groups = groupDeckCards(cards);
+function getProgressLabel(progress: Pick<DeckResolveProgress, "phase">) {
+  switch (progress.phase) {
+    case "collection":
+      return "Identifying cards…";
+    case "cheapest":
+      return "Finding cheapest paper printings…";
+    case "fallback":
+      return "Resolving remaining names…";
+    default:
+      return "Loading deck…";
+  }
+}
+
+function DeckResults({
+  cards,
+  tokens,
+  progress,
+}: {
+  cards: DeckResolvedCard[];
+  tokens: CardSearchResult[];
+  progress: Pick<DeckResolveProgress, "resolvedCount" | "totalCount" | "phase"> | null;
+}) {
+  const pendingCards = progress ? cards.filter((card) => !card.card) : [];
+  const groupedCards = progress ? cards.filter((card) => Boolean(card.card)) : cards;
+  const groups = groupDeckCards(groupedCards);
   const tokenDeckCards = tokens.map((token) => ({
     name: token.name,
     quantity: 1,
@@ -172,25 +306,27 @@ function DeckResults({ cards, tokens }: { cards: DeckResolvedCard[]; tokens: Car
 
   return (
     <section className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-xl">Card type breakdown</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-rows-2 gap-2 text-sm sm:grid-flow-col sm:auto-cols-fr">
-            {typeBreakdown.map((item) => (
-              <a
-                className="flex items-center justify-between rounded-md border bg-background/50 px-3 py-2 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                href={item.href}
-                key={item.key}
-              >
-                <span className="text-muted-foreground">{item.label}</span>
-                <span className="font-semibold">{item.quantity}</span>
-              </a>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      {typeBreakdown.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl">Card type breakdown</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-rows-2 gap-2 text-sm sm:grid-flow-col sm:auto-cols-fr">
+              {typeBreakdown.map((item) => (
+                <a
+                  className="flex items-center justify-between rounded-md border bg-background/50 px-3 py-2 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  href={item.href}
+                  key={item.key}
+                >
+                  <span className="text-muted-foreground">{item.label}</span>
+                  <span className="font-semibold">{item.quantity}</span>
+                </a>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="space-y-8">
         {DECK_GROUPS.map((group) => {
@@ -204,6 +340,14 @@ function DeckResults({ cards, tokens }: { cards: DeckResolvedCard[]; tokens: Car
         })}
         {tokenDeckCards.length > 0 && (
           <DeckSection cards={tokenDeckCards} label="Tokens" sectionId="deck-section-tokens" />
+        )}
+        {pendingCards.length > 0 && (
+          <DeckSection
+            cards={pendingCards}
+            label="Still resolving"
+            pending
+            sectionId="deck-section-pending"
+          />
         )}
       </div>
     </section>
@@ -240,10 +384,12 @@ function DeckSection({
   cards,
   label,
   sectionId,
+  pending = false,
 }: {
   cards: DeckResolvedCard[];
   label: string;
   sectionId: string;
+  pending?: boolean;
 }) {
   const quantity = cards.reduce((total, card) => total + card.quantity, 0);
 
@@ -265,16 +411,17 @@ function DeckSection({
         </div>
         <div className="h-px flex-1 bg-border" />
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {cards.map((deckCard) => (
-          <DeckCardTile deckCard={deckCard} key={`${deckCard.name}-${deckCard.card?.id ?? "unresolved"}`} />
-        ))}
-      </div>
+      <VirtualizedCardGrid
+        estimateRowHeight={400}
+        getKey={(deckCard) => `${deckCard.name}-${deckCard.card?.id ?? "unresolved"}`}
+        items={cards}
+        renderItem={(deckCard) => <DeckCardTile deckCard={deckCard} pending={pending} />}
+      />
     </div>
   );
 }
 
-function DeckCardTile({ deckCard }: { deckCard: DeckResolvedCard }) {
+function DeckCardTile({ deckCard, pending = false }: { deckCard: DeckResolvedCard; pending?: boolean }) {
   const card = deckCard.card;
 
   if (!card) {
@@ -283,7 +430,9 @@ function DeckCardTile({ deckCard }: { deckCard: DeckResolvedCard }) {
         <p className="font-semibold">
           {deckCard.quantity}x {deckCard.name}
         </p>
-        <p className="mt-2 text-muted-foreground">Unable to resolve this card.</p>
+        <p className="mt-2 text-muted-foreground">
+          {pending ? "Resolving…" : "Unable to resolve this card."}
+        </p>
       </div>
     );
   }

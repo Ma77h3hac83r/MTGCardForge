@@ -1,12 +1,14 @@
 import { Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppNav } from "@/components/AppNav";
 import { CheckboxFilterGroup, FilteredResultsLayout } from "@/components/CardFilters";
 import { CardDetail, CardTile } from "@/components/CardDisplay";
 import { ManaLoading } from "@/components/ManaLoading";
+import { SearchCombobox } from "@/components/SearchCombobox";
 import { SearchHotkeyHint } from "@/components/SearchHotkeyHint";
+import { VirtualizedCardGrid } from "@/components/VirtualizedCardGrid";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useDebouncedAsync } from "@/hooks/useDebouncedAsync";
 import { fetchCardNameSuggestions } from "@/lib/autocomplete";
 import {
   COLOR_FILTERS,
@@ -38,50 +40,49 @@ export function TokenSearch() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [message, setMessage] = useState("");
+  const searchControllerRef = useRef<AbortController | null>(null);
+  const tokenDetailControllerRef = useRef<AbortController | null>(null);
+  const tokenDetailRequestRef = useRef(0);
   const otherTokenPrintings = selectedToken
     ? tokenPrintings.filter((printing) => printing.id !== selectedToken.id)
     : tokenPrintings;
 
-  useEffect(() => {
-    const trimmedQuery = query.trim();
+  const trimmedQuery = query.trim();
+  const suggestionsEnabled = trimmedQuery.length >= 2 && state !== "loading";
 
-    if (trimmedQuery.length < 2 || state === "loading") {
+  useEffect(() => {
+    if (!suggestionsEnabled) {
       setSuggestions([]);
       setSuggestionsOpen(false);
-      return;
     }
+  }, [suggestionsEnabled]);
 
-    const controller = new AbortController();
-    const timeout = window.setTimeout(async () => {
-      try {
-        const sortedSuggestions = await fetchCardNameSuggestions(trimmedQuery, controller.signal, {
-          includeExtras: true,
-        });
-        setSuggestions(sortedSuggestions);
-        setSuggestionsOpen(sortedSuggestions.length > 0);
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return;
-        }
-
-        setSuggestions([]);
-        setSuggestionsOpen(false);
-      }
-    }, 250);
-
-    return () => {
-      controller.abort();
-      window.clearTimeout(timeout);
-    };
-  }, [query, state]);
+  useDebouncedAsync(
+    suggestionsEnabled,
+    [trimmedQuery],
+    (signal) => fetchCardNameSuggestions(trimmedQuery, signal, { includeExtras: true }),
+    (sortedSuggestions) => {
+      setSuggestions(sortedSuggestions);
+      setSuggestionsOpen(sortedSuggestions.length > 0);
+    },
+    () => {
+      setSuggestions([]);
+      setSuggestionsOpen(false);
+    },
+  );
 
   async function runSearch(nextQuery = query) {
     if (!nextQuery.trim()) {
+      searchControllerRef.current?.abort();
       resetSearch();
       return;
     }
 
     const controller = new AbortController();
+    searchControllerRef.current?.abort();
+    tokenDetailControllerRef.current?.abort();
+    tokenDetailRequestRef.current += 1;
+    searchControllerRef.current = controller;
     setState("loading");
     setMessage("");
     setSuggestions([]);
@@ -95,41 +96,100 @@ export function TokenSearch() {
 
     try {
       const result = await searchTokenOrCard(nextQuery, controller.signal);
+      if (searchControllerRef.current !== controller) {
+        return;
+      }
       setMode(result.mode);
       setSourceCard(result.sourceCard);
       setTokens(result.tokens);
 
       if (result.sourceCard) {
-        setSourcePrintings(await fetchCardPrintings(result.sourceCard, controller.signal));
+        const nextSourcePrintings = await fetchCardPrintings(result.sourceCard, controller.signal);
+        if (searchControllerRef.current !== controller) {
+          return;
+        }
+        setSourcePrintings(nextSourcePrintings);
       }
 
       if (result.tokens[0]) {
-        await selectToken(result.tokens[0], controller.signal);
+        await selectToken(result.tokens[0], {
+          signal: controller.signal,
+          isActive: () => searchControllerRef.current === controller,
+        });
+        if (searchControllerRef.current !== controller) {
+          return;
+        }
       }
 
       setState(result.tokens.length || result.sourceCard ? "results" : "empty");
       setMessage(result.tokens.length || result.sourceCard ? "" : `No tokens found for "${nextQuery.trim()}".`);
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
+      if (searchControllerRef.current !== controller || (error instanceof DOMException && error.name === "AbortError")) {
         return;
       }
 
       setState("error");
       setMessage(error instanceof Error ? error.message : "Unable to search tokens.");
+    } finally {
+      if (searchControllerRef.current === controller) {
+        searchControllerRef.current = null;
+      }
     }
   }
 
-  async function selectToken(token: CardSearchResult, signal?: AbortSignal) {
+  async function selectToken(
+    token: CardSearchResult,
+    options: { signal?: AbortSignal; isActive?: () => boolean } = {},
+  ) {
+    tokenDetailControllerRef.current?.abort();
+    const detailController = options.signal ? null : new AbortController();
+    const requestId = tokenDetailRequestRef.current + 1;
+    tokenDetailRequestRef.current = requestId;
+    const isActive = options.isActive ?? (() => true);
+    const signal = options.signal ?? detailController?.signal;
+
+    if (detailController) {
+      tokenDetailControllerRef.current = detailController;
+    }
+
     setSelectedToken(token);
-    const [printings, producerCards] = await Promise.all([
-      fetchTokenPrintings(token, signal),
-      fetchTokenProducers(token, signal),
-    ]);
-    setTokenPrintings(printings);
-    setProducers(producerCards);
+    setTokenPrintings([]);
+    setProducers([]);
+    setMessage("");
+
+    try {
+      const [printings, producerCards] = await Promise.all([
+        fetchTokenPrintings(token, signal),
+        fetchTokenProducers(token, signal),
+      ]);
+      if (!isActive() || tokenDetailRequestRef.current !== requestId) {
+        return;
+      }
+      setTokenPrintings(printings);
+      setProducers(producerCards);
+    } catch (error) {
+      if (
+        !isActive() ||
+        tokenDetailRequestRef.current !== requestId ||
+        (error instanceof DOMException && error.name === "AbortError")
+      ) {
+        return;
+      }
+
+      setTokenPrintings([]);
+      setProducers([]);
+      setMessage(`Unable to load details for ${token.name}.`);
+    } finally {
+      if (detailController && tokenDetailControllerRef.current === detailController) {
+        tokenDetailControllerRef.current = null;
+      }
+    }
   }
 
   function resetSearch() {
+    searchControllerRef.current?.abort();
+    tokenDetailControllerRef.current?.abort();
+    tokenDetailRequestRef.current += 1;
     setState("idle");
     setMode("token");
     setSourceCard(null);
@@ -155,55 +215,22 @@ export function TokenSearch() {
             }}
             role="search"
           >
-            <label className="sr-only" htmlFor="token-search">
-              Search by token or token-making card
-            </label>
-            <Input
+            <SearchCombobox
               id="token-search"
-              aria-autocomplete="list"
-              aria-controls="token-search-suggestions"
-              aria-expanded={suggestionsOpen}
-              autoComplete="off"
-              className="pr-12"
+              label="Search by token or token-making card"
+              open={suggestionsOpen}
+              options={suggestions}
               placeholder="Token or token-making card"
-              role="combobox"
               value={query}
-              onBlur={() => {
-                window.setTimeout(() => setSuggestionsOpen(false), 120);
-              }}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setSuggestionsOpen(true);
-              }}
-              onFocus={() => {
-                if (suggestions.length) {
-                  setSuggestionsOpen(true);
-                }
+              getOptionKey={(suggestion) => suggestion}
+              getOptionLabel={(suggestion) => suggestion}
+              onChange={setQuery}
+              onOpenChange={setSuggestionsOpen}
+              onSelect={(suggestion) => {
+                setQuery(suggestion);
+                void runSearch(suggestion);
               }}
             />
-            {suggestionsOpen && (
-              <div
-                className="absolute left-0 right-0 top-12 z-30 overflow-hidden rounded-lg border bg-card shadow-lg"
-                id="token-search-suggestions"
-                role="listbox"
-              >
-                {suggestions.map((suggestion) => (
-                  <button
-                    className="block w-full px-3 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none"
-                    key={suggestion}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      setQuery(suggestion);
-                      void runSearch(suggestion);
-                    }}
-                    role="option"
-                    type="button"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            )}
             <Button
               aria-label="Search"
               className="absolute right-1 top-1/2 h-9 w-9 -translate-y-1/2"
@@ -236,6 +263,11 @@ export function TokenSearch() {
               />
             )}
 
+            {message && (
+              <div className="rounded-lg border bg-card p-4 text-sm text-muted-foreground" role="alert">
+                {message}
+              </div>
+            )}
             {selectedToken && <CardDetail card={selectedToken} showStats title="Token Details" />}
             {otherTokenPrintings.length > 0 && <CardGrid cards={otherTokenPrintings} title="Other Printings" />}
             {producers.length > 0 && <CardGrid cards={producers} title="Cards That Make This Token" />}
@@ -382,11 +414,11 @@ function CardGrid({ cards, title }: { cards: CardSearchResult[]; title: string }
       <div>
         <h2 className="text-xl font-semibold tracking-normal">{title}</h2>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {cards.map((card) => (
-          <CardTile card={card} key={card.id} />
-        ))}
-      </div>
+      <VirtualizedCardGrid
+        getKey={(card) => card.id}
+        items={cards}
+        renderItem={(card) => <CardTile card={card} />}
+      />
     </section>
   );
 }

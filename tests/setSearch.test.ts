@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CATALOG_CACHE_KEYS, clearCachedValue, clearCatalogCacheMemory } from "@/lib/catalogCache";
 import {
   buildSetCardsQuery,
+  fetchAllSets,
   fetchSetCards,
   formatSetSuggestion,
+  resetSetsCatalogStateForTests,
   resolveSetWithSubsets,
   sortSetSuggestions,
+  streamSetCards,
   type ScryfallSet,
 } from "@/lib/setSearch";
 
@@ -75,6 +79,9 @@ const sets: ScryfallSet[] = [
 describe("setSearch", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    clearCatalogCacheMemory();
+    clearCachedValue(CATALOG_CACHE_KEYS.sets);
+    resetSetsCatalogStateForTests();
   });
 
   it("resolves a parent set with all child subsets", () => {
@@ -177,5 +184,75 @@ describe("setSearch", () => {
       "Base Card 2",
       "Commander Card",
     ]);
+  });
+
+  it("returns cached sets without refetching", async () => {
+    clearCatalogCacheMemory();
+    clearCachedValue(CATALOG_CACHE_KEYS.sets);
+    resetSetsCatalogStateForTests();
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ object: "list", data: sets }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await fetchAllSets();
+    const second = await fetchAllSets();
+
+    expect(first).toHaveLength(sets.length);
+    expect(second).toEqual(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams set cards page by page", async () => {
+    const resolved = resolveSetWithSubsets(sets, "SOS");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({
+          object: "list",
+          has_more: true,
+          next_page: "https://api.scryfall.com/cards/search?page=2",
+          data: [
+            {
+              id: "base-one",
+              name: "Base Card 1",
+              set: "sos",
+              collector_number: "1",
+              prices: {},
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({
+          object: "list",
+          has_more: false,
+          data: [
+            {
+              id: "commander",
+              name: "Commander Card",
+              set: "soc",
+              collector_number: "1",
+              prices: {},
+            },
+          ],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pages: Array<{ names: string[]; done: boolean }> = [];
+    await streamSetCards(resolved?.relatedSets ?? [], "all", (update) => {
+      pages.push({ names: update.cards.map((card) => card.name), done: update.done });
+    });
+
+    expect(pages).toEqual([
+      { names: ["Base Card 1"], done: false },
+      { names: ["Base Card 1", "Commander Card"], done: true },
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

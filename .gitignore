@@ -31,7 +31,11 @@ Thumbs.db
 .idea/
 .vscode/
 
-# Other
+# Other folders
 docs/
-PROJECT.md
 logs/
+.clawpatch/
+
+# Other files
+PROJECT.md
+TODO.md

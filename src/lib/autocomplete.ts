@@ -1,4 +1,5 @@
-import { getScryfallApiFetchUrl } from "@/lib/apiProxy";
+import { scryfallFetch } from "@/lib/apiProxy";
+import { CATALOG_CACHE_KEYS, getCachedValue, setCachedValue } from "@/lib/catalogCache";
 
 type ScryfallCatalogResponse = {
   object: string;
@@ -22,12 +23,7 @@ export async function fetchCardNameSuggestions(query: string, signal?: AbortSign
     url.searchParams.set("include_extras", "true");
   }
 
-  const response = await fetch(getScryfallApiFetchUrl(url.toString()), {
-    signal,
-    headers: {
-      Accept: "application/json",
-    },
-  });
+  const response = await scryfallFetch(url.toString(), { signal });
 
   if (!response.ok) {
     return [];
@@ -69,19 +65,19 @@ export function sortAutocompleteSuggestions(names: string[], query: string) {
 }
 
 async function fetchArtistNames(signal?: AbortSignal) {
-  artistNamesPromise ??= fetch(getScryfallApiFetchUrl("https://api.scryfall.com/catalog/artist-names"), {
-    signal,
-    headers: {
-      Accept: "application/json",
-    },
-  })
-    .then(async (response) => {
-      if (!response.ok) {
-        return [];
+  const cachedNames = getCachedValue<string[]>(CATALOG_CACHE_KEYS.artistNames);
+
+  if (cachedNames?.length) {
+    return cachedNames;
+  }
+
+  artistNamesPromise ??= fetchArtistNamesFromNetwork()
+    .then((names) => {
+      if (names.length) {
+        setCachedValue(CATALOG_CACHE_KEYS.artistNames, names);
       }
 
-      const payload = (await response.json()) as ScryfallCatalogResponse;
-      return payload.data ?? [];
+      return names;
     })
     .catch((error) => {
       artistNamesPromise = null;
@@ -93,7 +89,43 @@ async function fetchArtistNames(signal?: AbortSignal) {
       return [];
     });
 
-  return artistNamesPromise;
+  if (signal?.aborted) {
+    return [];
+  }
+
+  if (!signal) {
+    return artistNamesPromise;
+  }
+
+  try {
+    return await Promise.race([
+      artistNamesPromise,
+      new Promise<string[]>((_, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      }),
+    ]);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      return [];
+    }
+
+    return [];
+  }
+}
+
+async function fetchArtistNamesFromNetwork() {
+  const response = await scryfallFetch("https://api.scryfall.com/catalog/artist-names");
+
+  if (!response.ok) {
+    return [];
+  }
+
+  const payload = (await response.json()) as ScryfallCatalogResponse;
+  return payload.data ?? [];
 }
 
 function getAutocompleteRank(name: string, normalizedQuery: string) {

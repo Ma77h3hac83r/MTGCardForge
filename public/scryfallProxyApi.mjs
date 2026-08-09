@@ -7,7 +7,11 @@ const JSON_HEADERS = {
 
 const SCRYFALL_API_HOST = "api.scryfall.com";
 const DEFAULT_PROXY_TTL_SECONDS = 900;
+const CATALOG_TTL_SECONDS = 86400;
+const CARD_IDENTITY_TTL_SECONDS = 3600;
+const PRICE_QUERY_TTL_SECONDS = 300;
 const RANDOM_PRINTINGS_TTL_SECONDS = 300;
+const STALE_WHILE_REVALIDATE_SECONDS = 86400;
 const RANDOM_PRINTING_URL = "https://api.scryfall.com/cards/random?q=game%3Apaper";
 
 export async function handleScryfallProxyRequest(request) {
@@ -26,7 +30,7 @@ export async function handleScryfallProxyRequest(request) {
     return jsonResponse({ error: "Missing or unsupported Scryfall URL." }, 400);
   }
 
-  return cachedJsonFetch(request, targetUrl, DEFAULT_PROXY_TTL_SECONDS);
+  return cachedJsonFetch(request, targetUrl, getProxyTtlSeconds(targetUrl));
 }
 
 export async function handleRandomPrintingsRequest(request) {
@@ -84,6 +88,44 @@ export async function handleRandomPrintingsRequest(request) {
   return response;
 }
 
+export function getProxyTtlSeconds(targetUrl) {
+  try {
+    const url = new URL(targetUrl);
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+
+    if (path === "/sets" || path.startsWith("/catalog/")) {
+      return CATALOG_TTL_SECONDS;
+    }
+
+    if (path === "/cards/search") {
+      const query = `${url.searchParams.get("q") ?? ""} ${url.searchParams.get("order") ?? ""}`.toLowerCase();
+
+      if (query.includes("usd") || url.searchParams.get("order") === "usd") {
+        return PRICE_QUERY_TTL_SECONDS;
+      }
+
+      return DEFAULT_PROXY_TTL_SECONDS;
+    }
+
+    if (path === "/cards/named") {
+      return CARD_IDENTITY_TTL_SECONDS;
+    }
+
+    // Scryfall card ids are UUIDs; avoid matching /cards/search etc.
+    if (/^\/cards\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path)) {
+      return CARD_IDENTITY_TTL_SECONDS;
+    }
+
+    if (path === "/cards/random") {
+      return RANDOM_PRINTINGS_TTL_SECONDS;
+    }
+
+    return DEFAULT_PROXY_TTL_SECONDS;
+  } catch {
+    return DEFAULT_PROXY_TTL_SECONDS;
+  }
+}
+
 async function cachedJsonFetch(request, targetUrl, ttlSeconds) {
   const cache = getDefaultCache();
   const cachedResponse = await cache?.match(request);
@@ -102,7 +144,7 @@ async function cachedJsonFetch(request, targetUrl, ttlSeconds) {
   const proxiedResponse = new Response(response.body, {
     headers: {
       ...JSON_HEADERS,
-      "Cache-Control": response.ok ? `public, max-age=${ttlSeconds}` : "no-store",
+      "Cache-Control": response.ok ? buildCacheControl(ttlSeconds) : "no-store",
     },
     status: response.status,
   });
@@ -112,6 +154,11 @@ async function cachedJsonFetch(request, targetUrl, ttlSeconds) {
   }
 
   return proxiedResponse;
+}
+
+function buildCacheControl(ttlSeconds) {
+  const staleWhileRevalidate = Math.max(ttlSeconds, STALE_WHILE_REVALIDATE_SECONDS);
+  return `public, max-age=${ttlSeconds}, s-maxage=${ttlSeconds}, stale-while-revalidate=${staleWhileRevalidate}`;
 }
 
 function getSafeScryfallApiUrl(value) {
@@ -148,7 +195,7 @@ function jsonResponse(payload, status = 200, ttlSeconds = 0) {
   return new Response(JSON.stringify(payload), {
     headers: {
       ...JSON_HEADERS,
-      "Cache-Control": ttlSeconds ? `public, max-age=${ttlSeconds}` : "no-store",
+      "Cache-Control": ttlSeconds ? buildCacheControl(ttlSeconds) : "no-store",
     },
     status,
   });

@@ -9,6 +9,7 @@ import {
   parseDeckInput,
   parseDeckList,
   resolveDeckCards,
+  streamResolveDeckCards,
 } from "@/lib/deckSearch";
 import type { CardSearchResult } from "@/lib/scryfall";
 
@@ -187,6 +188,12 @@ Companion:
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
+        response(200, {
+          data: [],
+          not_found: [{ name: "Castle Shimura" }],
+        }),
+      )
+      .mockResolvedValueOnce(
         response(404, {
           object: "error",
           details: "No cards found.",
@@ -214,7 +221,8 @@ Companion:
 
     expect(cards[0].card?.name).toBe("Eiganjo Castle");
     expect(cards[0].card?.setCode).toBe("SLD");
-    expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("q")).toBe(
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.scryfall.com/cards/collection");
+    expect(new URL(String(fetchMock.mock.calls[2][0])).searchParams.get("q")).toBe(
       '"Castle Shimura" game:paper usd>=0',
     );
   });
@@ -223,21 +231,21 @@ Companion:
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
-        response(404, {
-          object: "error",
-          details: "No cards found.",
-        }),
-      )
-      .mockResolvedValueOnce(
-        response(404, {
-          object: "error",
-          details: "No cards found.",
-        }),
-      )
-      .mockResolvedValueOnce(
         response(200, {
           data: [],
           not_found: [{ name: "Giada Font of Hope" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        response(404, {
+          object: "error",
+          details: "No cards found.",
+        }),
+      )
+      .mockResolvedValueOnce(
+        response(404, {
+          object: "error",
+          details: "No cards found.",
         }),
       )
       .mockResolvedValueOnce(
@@ -256,7 +264,57 @@ Companion:
     const cards = await resolveDeckCards([{ name: "Giada Font of Hope", quantity: 1 }]);
 
     expect(cards[0].card?.name).toBe("Giada, Font of Hope");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.scryfall.com/cards/collection");
     expect(fetchMock.mock.calls[3][0]).toBe("https://api.scryfall.com/cards/named?fuzzy=Giada%20Font%20of%20Hope");
+  });
+
+  it("streams collection hits before cheapest upgrades", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, {
+          data: [
+            {
+              id: "default-ring",
+              name: "Sol Ring",
+              set: "c21",
+              set_name: "Commander 2021",
+              collector_number: "1",
+              type_line: "Artifact",
+              prices: { usd: "1.50" },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        response(200, {
+          object: "list",
+          data: [
+            {
+              id: "cheap-ring",
+              name: "Sol Ring",
+              set: "cmm",
+              set_name: "Commander Masters",
+              collector_number: "400",
+              type_line: "Artifact",
+              prices: { usd: "0.99" },
+            },
+          ],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pages: Array<{ id: string | null; phase: string }> = [];
+
+    await streamResolveDeckCards([{ name: "Sol Ring", quantity: 1 }], (progress) => {
+      pages.push({
+        id: progress.cards[0]?.card?.id ?? null,
+        phase: progress.phase,
+      });
+    });
+
+    expect(pages.some((page) => page.phase === "collection" && page.id === "default-ring")).toBe(true);
+    expect(pages.at(-1)).toEqual({ id: "cheap-ring", phase: "done" });
   });
 
   it("parses Moxfield deck URLs", async () => {

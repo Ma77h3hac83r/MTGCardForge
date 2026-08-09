@@ -1,5 +1,5 @@
 import { ExternalLink } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { InlineManaText, ManaSymbols, SetSymbol } from "@/components/CardSymbols";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import tcgplayerUrl from "@/images/tcgplayer.png";
@@ -68,11 +68,44 @@ export function CardTile({
 
 function CardTileImage({ card, quantity }: { card: CardSearchResult; quantity?: number }) {
   const image = card.images[0];
+  const src = image?.small ?? image?.normal ?? image?.large ?? null;
+  const lqip = image?.artCrop && image.artCrop !== src ? image.artCrop : null;
+  const [loaded, setLoaded] = useState(false);
+  const srcSet = [
+    image?.small ? `${image.small} 146w` : null,
+    image?.normal ? `${image.normal} 488w` : null,
+    image?.large ? `${image.large} 672w` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return (
-    <div className="relative aspect-[5/7] bg-muted">
-      {image?.normal ? (
-        <img alt={card.name} className="h-full w-full object-cover" loading="lazy" src={image.normal} />
+    <div className="relative aspect-[5/7] overflow-hidden bg-muted">
+      {lqip ? (
+        <img
+          alt=""
+          aria-hidden="true"
+          className={`absolute inset-0 h-full w-full scale-110 object-cover blur-md transition-opacity duration-300 ${
+            loaded ? "opacity-0" : "opacity-100"
+          }`}
+          decoding="async"
+          loading="lazy"
+          src={lqip}
+        />
+      ) : null}
+      {src ? (
+        <img
+          alt={card.name}
+          className={`relative h-full w-full object-cover transition-opacity duration-300 ${
+            loaded || !lqip ? "opacity-100" : "opacity-0"
+          }`}
+          decoding="async"
+          loading="lazy"
+          sizes="(max-width: 640px) 50vw, (max-width: 768px) 33vw, (max-width: 1024px) 25vw, 20vw"
+          src={src}
+          srcSet={srcSet || undefined}
+          onLoad={() => setLoaded(true)}
+        />
       ) : (
         <div className="flex h-full items-center justify-center px-5 text-center text-sm text-muted-foreground">
           No image available

@@ -1,4 +1,5 @@
 ---
+import HomeIdlePrefetch from "@/components/HomeIdlePrefetch";
 import HomeRandomPrintings from "@/components/HomeRandomPrintings";
 import SiteLayout from "@/layouts/SiteLayout.astro";
 
@@ -79,6 +80,7 @@ const tools = [
         </div>
 
         <HomeRandomPrintings client:load />
+        <HomeIdlePrefetch client:load />
       </div>
     </section>
 

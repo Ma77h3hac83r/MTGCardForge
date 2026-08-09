@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SetSearch } from "@/components/SetSearch";
+import { CATALOG_CACHE_KEYS, clearCachedValue, clearCatalogCacheMemory } from "@/lib/catalogCache";
+import { resetSetsCatalogStateForTests } from "@/lib/setSearch";
 
 const setsPayload = {
   object: "list",
@@ -61,9 +63,18 @@ function response(status: number, payload: unknown) {
 }
 
 describe("SetSearch", () => {
+  beforeEach(() => {
+    clearCatalogCacheMemory();
+    clearCachedValue(CATALOG_CACHE_KEYS.sets);
+    resetSetsCatalogStateForTests();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     window.history.replaceState(null, "", "/");
+    clearCatalogCacheMemory();
+    clearCachedValue(CATALOG_CACHE_KEYS.sets);
+    resetSetsCatalogStateForTests();
   });
 
   it("groups cards by set and provides a jump dropdown", async () => {
